@@ -8,8 +8,6 @@
  * @module
  */
 
-import type * as http from "../http.js";
-import type * as insforgeMirror from "../insforgeMirror.js";
 import type * as observability from "../observability.js";
 import type * as reinforce from "../reinforce.js";
 import type * as reinforceNode from "../reinforceNode.js";
@@ -28,8 +26,6 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  http: typeof http;
-  insforgeMirror: typeof insforgeMirror;
   observability: typeof observability;
   reinforce: typeof reinforce;
   reinforceNode: typeof reinforceNode;

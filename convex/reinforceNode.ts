@@ -51,10 +51,22 @@ export const reinforce = action({
     let hyperspellWriteback = false;
     try {
       const hyperspell = getHyperspell();
+      // Round-2 DA finding (C2): the recall-side `MemorySchema` validator
+      // (lib/types.ts:10) only accepts `slack|notion|gmail|code` sources,
+      // so reinforce memories written with `source: "triage_history"` were
+      // silently filtered out of Trace B's recall response — killing the
+      // Invariant 2 reinforcement effect in convex/agent mode.
+      //
+      // Match the replay-fixture pattern (data/replay/trace-b.json):
+      // `source: "slack"` (the original cluster's dominant source) plus
+      // `metadata.kind: "triage_history"`. The frontend's `fromTriageHistory`
+      // detector keys off `metadata.kind`, not the source field, so this
+      // change is transparent to consumers.
       await hyperspell.memories.add({
         text: `User triaged incident: ${hydrated.run.inputTrace.slice(0, 200)}`,
-        source: "triage_history",
+        source: "slack",
         metadata: {
+          kind: "triage_history",
           reinforces: reinforcedMemoryIds,
           triage_run_id: String(args.triageRunId),
           root_cause: hydrated.run.rootCause?.text,
