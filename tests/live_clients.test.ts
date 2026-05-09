@@ -49,93 +49,10 @@ describe("live sponsor clients", () => {
     expect(JSON.parse(String(init.body))).not.toHaveProperty("query");
   });
 
-  it("Hyperspell live search uses /memories/query and maps resources to memories", async () => {
-    process.env.HYPERSPELL_API_KEY = "hs_test_key";
-    process.env.HYPERSPELL_ACCOUNT_EMAIL = "yahya@example.com";
-    const fetchMock = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          query_id: "query_123",
-          errors: [],
-          documents: [
-            {
-              source: "slack",
-              resource_id: "mem_slack_1",
-              title: "Incident thread",
-              memories: ["Stripe webhook retry discussion"],
-              metadata: { channel: "incidents" },
-              score: 0.91,
-            },
-          ],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      )
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await new HyperspellClient().memories.search({
-      query: "stripe webhook idempotency",
-      options: { limit: 1 },
-    });
-
-    expect(result.memories).toEqual([
-      {
-        id: "mem_slack_1",
-        text: "Stripe webhook retry discussion",
-        source: "slack",
-        metadata: { channel: "incidents" },
-        score: 0.91,
-      },
-    ]);
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [
-      string,
-      RequestInit,
-    ];
-    expect(url).toBe("https://api.hyperspell.com/memories/query");
-    expect((init.headers as Record<string, string>)["X-As-User"]).toBe(
-      "sandbox:yahya@example.com"
-    );
-    expect(JSON.parse(String(init.body))).toMatchObject({
-      query: "stripe webhook idempotency",
-      max_results: 1,
-      answer: false,
-      effort: "minimal",
-    });
-  });
-
-  it("Hyperspell live add uses /memories/add and returns resource_id", async () => {
-    process.env.HYPERSPELL_API_KEY = "hs_test_key";
-    process.env.HYPERSPELL_ACCOUNT_EMAIL = "yahya@example.com";
-    const fetchMock = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          source: "vault",
-          resource_id: "mem_added_1",
-          status: "pending",
-        }),
-        { status: 200, headers: { "content-type": "application/json" } }
-      )
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await new HyperspellClient().memories.add({
-      text: "new triage memory",
-      source: "triage_history",
-      metadata: { orgId: "demo-org" },
-    });
-
-    expect(result).toEqual({ id: "mem_added_1" });
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [
-      string,
-      RequestInit,
-    ];
-    expect(url).toBe("https://api.hyperspell.com/memories/add");
-    expect((init.headers as Record<string, string>)["X-As-User"]).toBe(
-      "sandbox:yahya@example.com"
-    );
-    expect(JSON.parse(String(init.body))).toMatchObject({
-      text: "new triage memory",
-      metadata: { orgId: "demo-org", source: "triage_history" },
-    });
-  });
+  // Hyperspell live-search/add tests removed during merge of PR #11.
+  // PR #11's tests/hyperspell-live-wire.test.ts has 6 fetch-mock tests
+  // that cover the same wire format with the canonical PR-#11 client
+  // shape. The original tests in this file asserted a different
+  // implementation shape (sandbox:user X-As-User, {id,text,source,...}
+  // mapping) that PR #11 doesn't produce.
 });

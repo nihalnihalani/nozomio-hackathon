@@ -34,6 +34,13 @@ export interface AddMemoryInput {
 }
 
 export interface SearchOptions {
+  /**
+   * Per-source weighting hint. **Replay-mode only** post-2026-05-09 fix: the
+   * live Hyperspell `/memories/query` endpoint does not accept a
+   * `source_weights` parameter, so this value is silently ignored on the
+   * wire. It is still mixed into `hashKey()` for replay-fixture lookup
+   * determinism, so callers may pass it without breaking replay.
+   */
   source_weights?: Partial<Record<SourceType | "triage_history", number>>;
   limit?: number;
 }
@@ -146,110 +153,122 @@ async function appendReplayWrite(input: AddMemoryInput): Promise<void> {
 
 // ─── Live branches ────────────────────────────────────────────────────────────
 
+// Live response shape per docs.hyperspell.com/api-reference/memories/query-memories.
+// `documents` array carries metadata only — text content is NOT returned by the
+// query endpoint (would require a follow-up `Get Memory` call to hydrate).
+// We surface `title` as the excerpt fallback when no text is available; the
+// demo path is replay so this only matters for live-mode introspection.
 interface LiveSearchResponseRaw {
+  query_id?: string | null;
   documents?: Array<{
     source?: string;
     resource_id?: string;
     title?: string | null;
     metadata?: Record<string, unknown>;
-    memories?: string[];
-    score?: number;
+    score?: number | null;
+    folder_id?: string | null;
+    parent_folder_id?: string | null;
   }>;
-  results?: Array<{
-    id?: string;
-    memory_id?: string;
-    text?: string;
-    content?: string;
-    source?: string;
-    metadata?: Record<string, unknown>;
-    score?: number;
-  }>;
-}
-
-function hyperspellHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {
-    "content-type": "application/json",
-    authorization: `Bearer ${process.env.HYPERSPELL_API_KEY!}`,
-  };
-  const asUser = process.env.HYPERSPELL_AS_USER ??
-    (process.env.HYPERSPELL_ACCOUNT_EMAIL
-      ? `sandbox:${process.env.HYPERSPELL_ACCOUNT_EMAIL}`
-      : undefined);
-  if (asUser) headers["X-As-User"] = asUser;
-  return headers;
-}
-
-function normalizeSource(source: string | undefined): SourceType | undefined {
-  if (source === "google_mail") return "gmail";
-  if (source === "slack" || source === "notion" || source === "gmail") {
-    return source;
-  }
-  return undefined;
+  answer?: string | null;
+  errors?: unknown;
 }
 
 async function liveSearch(input: SearchInput): Promise<SearchResult> {
-  const body = {
+  const apiKey = process.env.HYPERSPELL_API_KEY!;
+  // Real endpoint: POST /memories/query (no /v1 prefix; no `source_weights`,
+  // no top-level `limit` — use options.max_results). Per-source weighting
+  // is not exposed via this surface; we keep the in-memory weighting on the
+  // replay-fixture hash only.
+  const body: Record<string, unknown> = {
     query: input.query,
-    answer: false,
-    effort: "minimal",
-    max_results: input.options?.limit ?? 5,
+    options: {
+      max_results: input.options?.limit ?? 5,
+    },
   };
   const res = await fetch(`${HYPERSPELL_API_BASE}/memories/query`, {
     method: "POST",
-    headers: hyperspellHeaders(),
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`hyperspell search ${res.status}: ${await res.text()}`);
+    throw new Error(`hyperspell query ${res.status}: ${await res.text()}`);
   }
   const json = (await res.json()) as LiveSearchResponseRaw;
-  const documentMemories: Memory[] = (json.documents ?? []).flatMap((r) => {
-    const source = normalizeSource(r.source);
-    const id = r.resource_id;
-    const text = r.memories?.[0] ?? r.title ?? undefined;
-    if (!id || !text || !source) return [];
+  // Surface partial-failure errors from the API. Hyperspell can return a
+  // 200 response with `errors: [{error, message}]` (e.g., NoResultsForSource
+  // when querying an unconnected provider). We log so the demo team can
+  // debug "why are documents empty" without rerunning under DEBUG=*.
+  if (Array.isArray(json.errors) && json.errors.length > 0) {
+    console.warn("[hyperspell] query returned partial errors:", json.errors);
+  }
+  const memories: Memory[] = (json.documents ?? []).flatMap((d) => {
+    const id = d.resource_id;
+    // Round-trip safety: `liveAdd` writes our logical source (slack/notion/
+    // gmail/triage_history) into `metadata.source` because the public API has
+    // no top-level `source` parameter on add. The query endpoint returns a
+    // top-level `source` (Hyperspell's connector identity, e.g. "vault" for
+    // direct adds, "slack" for OAuth-connected Slack). Prefer metadata.source
+    // when present so memories ingested via this client come back classified
+    // the way the agent expects; fall back to top-level for connector data.
+    const metaSource =
+      typeof d.metadata?.source === "string"
+        ? (d.metadata.source as SourceType)
+        : undefined;
+    const source = metaSource ?? (d.source as SourceType | undefined);
+    // The query endpoint does not return text; surface `title` as the
+    // excerpt fallback. If neither is present, drop the result rather
+    // than fabricate (Invariant 1 — Cite-or-Die).
+    const text = d.title ?? "";
+    if (!id || !source || !text) return [];
     const safe = MemorySchema.safeParse({
       id,
       text,
       source,
-      metadata: r.metadata,
-      score: r.score,
+      metadata: d.metadata,
+      score: d.score ?? undefined,
     });
     return safe.success ? [safe.data] : [];
   });
-  const legacyMemories: Memory[] = (json.results ?? []).flatMap((r) => {
-    const id = r.id ?? r.memory_id;
-    const text = r.text ?? r.content;
-    const source = normalizeSource(r.source);
-    if (!id || !text || !source) return [];
-    const safe = MemorySchema.safeParse({
-      id,
-      text,
-      source,
-      metadata: r.metadata,
-      score: r.score,
-    });
-    return safe.success ? [safe.data] : [];
-  });
-  return { memories: documentMemories.length > 0 ? documentMemories : legacyMemories };
+  return { memories };
+}
+
+// Live response shape per docs.hyperspell.com/api-reference/memories/add-a-memory.
+interface LiveAddResponseRaw {
+  source?: string;
+  resource_id?: string;
+  status?: string;
 }
 
 async function liveAdd(input: AddMemoryInput): Promise<{ id: string }> {
-  const metadata = {
-    ...(input.metadata ?? {}),
-    source: input.source,
+  const apiKey = process.env.HYPERSPELL_API_KEY!;
+  // Real endpoint: POST /memories/add. Body fields: text, resource_id?,
+  // title?, date?, metadata?. There is no top-level `source` field — we
+  // encode it in `metadata.source` so callers (reinforce, ingest) can
+  // still distinguish slack/notion/gmail/triage_history downstream.
+  const body = {
+    text: input.text,
+    metadata: {
+      ...(input.metadata ?? {}),
+      source: input.source,
+    },
   };
   const res = await fetch(`${HYPERSPELL_API_BASE}/memories/add`, {
     method: "POST",
-    headers: hyperspellHeaders(),
-    body: JSON.stringify({ text: input.text, metadata }),
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     throw new Error(`hyperspell add ${res.status}: ${await res.text()}`);
   }
-  const json = (await res.json()) as { id?: string; memory_id?: string; resource_id?: string };
-  const id = json.id ?? json.memory_id ?? json.resource_id;
-  if (!id) throw new Error("hyperspell add: response missing id");
+  const json = (await res.json()) as LiveAddResponseRaw;
+  const id = json.resource_id;
+  if (!id) throw new Error("hyperspell add: response missing resource_id");
   return { id };
 }
 
