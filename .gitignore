@@ -31,6 +31,10 @@ Thumbs.db
 .vscode/
 *.swp
 
+# Agent runtime state (machine-local, not for repo)
+.claude/agent-memory/
+.omc/
+
 # Logs
 *.log
 logs/
