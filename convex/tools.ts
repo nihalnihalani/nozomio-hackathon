@@ -2,7 +2,7 @@ import { action } from "./_generated/server";
 import { v } from "convex/values";
 
 const HYPERSPELL_URL = "https://api.hyperspell.com/memories/query";
-const NIA_URL = "https://apigcp.trynia.ai/v2/search/universal";
+const NIA_SEARCH_URL = "https://apigcp.trynia.ai/v2/search";
 
 export const recallSimilarIncidents = action({
   args: {
@@ -52,7 +52,6 @@ export const recallSimilarIncidents = action({
 export const searchCode = action({
   args: {
     query: v.string(),
-    topK: v.optional(v.number()),
     repositories: v.optional(v.array(v.string())),
   },
   handler: async (_ctx, args) => {
@@ -60,16 +59,19 @@ export const searchCode = action({
     if (!apiKey) throw new Error("NIA_API_KEY not set in Convex env");
 
     const body: Record<string, unknown> = {
-      query: args.query,
-      mode: "universal",
-      top_k: args.topK ?? 5,
+      mode: "query",
+      messages: [{ role: "user", content: args.query }],
+      include_sources: true,
+      fast_mode: true,
+      skip_llm: true,
     };
     if (args.repositories && args.repositories.length > 0) {
       body.repositories = args.repositories;
+      body.search_mode = "repositories";
     }
 
     const startedAt = Date.now();
-    const res = await fetch(NIA_URL, {
+    const res = await fetch(NIA_SEARCH_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
