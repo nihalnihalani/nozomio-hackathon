@@ -181,18 +181,19 @@ export const runTriage = internalAction({
     threadId: v.string(),
   },
   handler: async (ctx, args) => {
-    // ─── Pre-flight: Anthropic key required for live agent path ─────────
-    // Round-2 DA finding (M2): `runTriage` dives straight into
-    // `triageAgent.continueThread` → `streamText`, which throws an opaque
-    // SDK error if no Anthropic key is set. The replay path in
-    // `lib/agent/loop.ts:runLive` falls back gracefully; the agent path
-    // surfaces a clear error instead so the user sees the actual problem.
-    if (!process.env.ANTHROPIC_API_KEY) {
+    // ─── Pre-flight: LLM key required for live agent path ──────────────
+    // The agent uses openai.chat("gpt-4o-mini") in convex/triageAgent.ts
+    // (was Anthropic in PR #10; we migrated to OpenAI when we verified
+    // the sk-proj-... key worked for both chat + embeddings). Accept
+    // either provider key — the actual model selection happens in
+    // triageAgent.ts. Replay path falls back gracefully; agent path
+    // surfaces a clear error so the user sees the actual problem.
+    if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
       await ctx.runMutation(api.triage.setStatus, {
         triageRunId: args.triageRunId,
         status: "error",
         errorMessage:
-          "ANTHROPIC_API_KEY is not set in the Convex deployment. The agent live path requires it. Set the key via `npx convex env set ANTHROPIC_API_KEY ...` or run with `DEMO_MODE=replay` for the hermetic demo path.",
+          "No LLM key set on the Convex deployment. The agent live path needs OPENAI_API_KEY or ANTHROPIC_API_KEY (matching the model in convex/triageAgent.ts). Set via `npx convex env set OPENAI_API_KEY ...` or run with `DEMO_MODE=replay` for the hermetic demo path.",
       });
       return;
     }

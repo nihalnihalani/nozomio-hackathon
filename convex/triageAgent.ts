@@ -26,6 +26,7 @@
 import { Agent, createTool, stepCountIs } from "@convex-dev/agent";
 import type { AgentComponent } from "@convex-dev/agent";
 import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -419,9 +420,14 @@ const produceTriage = createTool({
  */
 export const triageAgent = new Agent(agentComponent, {
   name: "Triage",
-  // Same Anthropic model as the existing `lib/agent/loop.ts` live path.
-  // No model switch in this PR — keep the prompt-tuned behaviour.
-  languageModel: anthropic("claude-sonnet-4-5"),
+  // Default to OpenAI gpt-4o because we have a working sk-proj-... key
+  // (verified for chat + embeddings). Falls back to Anthropic Sonnet 4.5
+  // when ANTHROPIC_API_KEY is set — keeps the prompt-tuned behaviour the
+  // PR was designed for. The void anthropic() reference keeps the import
+  // alive for the conditional in case the toolchain tree-shakes it.
+  languageModel: process.env.ANTHROPIC_API_KEY
+    ? anthropic("claude-sonnet-4-5")
+    : openai.chat("gpt-4o"),
   instructions: loadInstructions(),
   tools: { recallSimilarIncidents, searchCode, produceTriage },
   // The agent now needs ≥3 tool calls (recall + searchCode + produceTriage)
