@@ -31,6 +31,8 @@ the reinforcement wow moment.
 
 ## Architecture
 
+[![Triage architecture](docs/architecture.png)](docs/architecture.png)
+
 ```
                           ┌─────────────────────────────┐
                           │       TRIAGE (agent)        │
@@ -203,8 +205,11 @@ Skills under `.agents/skills/` (symlinked into `.claude/skills/`):
 - **Event:** Nozomio Hackathon, May 9 2026, EF SF
 - **Track:** 4 — The Company Brain (Nia + Hyperspell)
 - **Team:** see commits in `git log`
-- **Submission:** https://luma.com/rshibq6i
+- **Submission:** https://forms.gle/fkoFXRo3L2MVkkz87
 
 See `IDEAS.md` for the 9-agent ideation squad output that produced
 Triage as the chosen build, `PLAN.md` for the 5-hour build plan,
-`CLAUDE.md` for the project rules every PR must follow.
+`CLAUDE.md` for the project rules every PR must follow,
+`HUMAN_TODO.md` for the human-only items left before the 6pm
+submission, and `docs/architecture.png` as a printable fallback
+slide.
