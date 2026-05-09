@@ -1,0 +1,25 @@
+{
+  "name": "nozomio-hackathon",
+  "version": "1.0.0",
+  "description": "**May 9, 2026 | 8:00 AM – 8:00 PM (PDT)**",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nihalnihalani/nozomio-hackathon.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/nihalnihalani/nozomio-hackathon/issues"
+  },
+  "homepage": "https://github.com/nihalnihalani/nozomio-hackathon#readme",
+  "dependencies": {
+    "@hyperspell/hyperspell": "^0.38.0",
+    "convex": "^1.38.0"
+  }
+}
