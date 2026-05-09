@@ -200,6 +200,21 @@ Skills under `.agents/skills/` (symlinked into `.claude/skills/`):
 
 ---
 
+## Roadmap (post-hackathon)
+
+The current architecture uses Convex as a reactive query layer + mirror
+target; the agent loop is hand-rolled in `lib/agent/loop.ts`. The 2025–26
+Convex `@convex-dev/agent` component would replace ~80% of that loop with
+a managed runtime (threads, tool dispatch, delta streaming, built-in RAG).
+
+Full migration plan in [`convexplan.md`](./convexplan.md) — 6 sequenced
+phases, ~10 person-hours, deliberately deferred until after the
+hackathon submission to avoid destabilizing the working demo path.
+
+The plan also covers PostHog LLM Analytics integration via
+`@posthog/convex`, replacing today's `console.log` observability with
+per-call cost/latency/model traces.
+
 ## Hackathon meta
 
 - **Event:** Nozomio Hackathon, May 9 2026, EF SF
