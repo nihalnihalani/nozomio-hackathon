@@ -217,4 +217,38 @@ describe("hyperspell client — live wire format", () => {
       getHyperspell().memories.add({ text: "x", source: "slack" })
     ).rejects.toThrow(/missing resource_id/);
   });
+
+  it("intentionally drops triage_history memories on read (Invariant 2)", async () => {
+    // `liveAdd` accepts `source: 'triage_history'` and stores it under
+    // metadata.source. `liveSearch`'s round-trip preference would surface it
+    // as `source: 'triage_history'` — but SourceTypeSchema does not include
+    // that variant, so MemorySchema.safeParse fails and the doc is dropped.
+    // This is intentional per Invariant 2: only convex/reinforce.ts cares
+    // about triage_history records (tracked via memoryEvents in Convex), and
+    // they must NOT leak into agent context. This test locks the drop in so a
+    // future broadening of SourceTypeSchema cannot silently regress.
+    mockFetchOk({
+      documents: [
+        {
+          source: "vault",
+          resource_id: "mem_reinforce_traceA",
+          title: "User triaged duplicate-charge incident",
+          metadata: { source: "triage_history", reinforces: ["mem_x"] },
+        },
+        {
+          source: "vault",
+          resource_id: "mem_legit_slack",
+          title: "Real Slack memory",
+          metadata: { source: "slack" },
+        },
+      ],
+      errors: null,
+    });
+    const { getHyperspell } = await import(mod());
+    const r = await getHyperspell().memories.search({ query: "x" });
+    // The triage_history memory must be dropped; the slack memory survives.
+    expect(r.memories.map((m: { id: string }) => m.id)).toEqual([
+      "mem_legit_slack",
+    ]);
+  });
 });
