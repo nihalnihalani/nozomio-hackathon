@@ -97,7 +97,7 @@
 
 ```
 Frontend:        Next.js 15 (App Router) · TypeScript · shadcn/ui · Tailwind
-LLM:             Anthropic Claude Sonnet (direct API, NOT via gateway — $5 burns fast)
+LLM:             OpenAI gpt-5.5 (reasoning model; see .env OPENAI_MODEL / OPENAI_REASONING_EFFORT)
 Agent runtime:   @convex-dev/agent + Vercel AI SDK 6
 Backend (hot):   Convex (queries, mutations, actions, scheduled functions)
 Backend (cold):  InsForge (Postgres + auth + RLS + edge functions)
@@ -110,7 +110,7 @@ Observability:   Convex dashboard + console.log (don't over-engineer)
 
 **Key packages:**
 ```bash
-npm i ai zod @ai-sdk/anthropic @ai-sdk/react
+npm i ai zod @ai-sdk/openai @ai-sdk/react
 npm i convex @convex-dev/agent
 npm i @insforge/sdk
 npm i @hyperspell/hyperspell
@@ -328,7 +328,7 @@ Both should map to the same root cause cluster — the Slack DM about retry budg
 
 **Person 1 (Agent):**
 - `npx create-next-app@latest triage-app` (TS, App Router, Tailwind, shadcn slate theme)
-- `npm i ai zod @ai-sdk/anthropic @ai-sdk/react convex @convex-dev/agent`
+- `npm i ai zod @ai-sdk/openai @ai-sdk/react convex @convex-dev/agent`
 - `npx convex dev` → log in → create project
 - Define `convex/schema.ts` (see §5)
 - Stub `convex/triage.ts` action returning hardcoded data
@@ -412,7 +412,7 @@ Both should map to the same root cause cluster — the Slack DM about retry budg
 ### H3:30 — H4:30 — Deploy + rehearse
 
 **All 3:**
-- Final Vercel deploy with all env vars set (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `NIA_API_KEY`, `HYPERSPELL_API_KEY`, `INSFORGE_BASE_URL`, `INSFORGE_ANON_KEY`, `CONVEX_URL`, `CONVEX_DEPLOYMENT`)
+- Final Vercel deploy with all env vars set (`OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_REASONING_EFFORT`, `NIA_API_KEY`, `HYPERSPELL_API_KEY`, `HYPERSPELL_USER_TOKEN`, `INSFORGE_BASE_URL`, `INSFORGE_ANON_KEY`, `CONVEX_URL`, `CONVEX_DEPLOYMENT`)
 - Test full demo flow on the production URL from a phone (signal #1 of production-readiness)
 - 3× full-demo rehearsals out loud — Person 3 narrates, Person 2 drives, Person 1 watches Convex backend logs
 - Test the deliberate-failure beat (paste "hello world" → graceful response)
