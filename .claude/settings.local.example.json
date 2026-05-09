@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy this to .claude/settings.local.json (gitignored), fill in your Hyperspell credentials, restart Claude Code. Version is pinned; bump deliberately. NOTE: the official MCP server's --tools arg only accepts 'code' or 'docs' (server-side categories), NOT specific method names — to restrict per-method writes for Invariant 2, use --code-blocked-methods with regex patterns. For now this config exposes the default tool set; Invariant 2 (only convex/reinforceNode.ts writes triage_history) is enforced at the application layer, not the MCP layer. The bin name is mcp-server inside the scoped package — invoke via -p so npx finds it.",
+  "_comment": "Copy this to .claude/settings.local.json (gitignored), fill in your Hyperspell API key, restart Claude Code. Version is pinned; bump deliberately. The bin name is mcp-server inside the scoped package — invoke via -p so npx resolves it. The MCP exposes only two tools (search_docs and execute); execute runs arbitrary TypeScript against the Hyperspell SDK, so we restrict via --code-blocked-methods with regex against SDK method FQNs to enforce Invariant 2 (only convex/reinforceNode.ts may write triage_history memories). Substring match on user-submitted source — guardrail not hard sandbox; defense-in-depth alongside the application-layer enforcement. The MCP server only reads HYPERSPELL_API_KEY; HYPERSPELL_TOKEN and HYPERSPELL_USER_ID from Hyperspell's docs example are inert at the MCP layer.",
   "mcpServers": {
     "hyperspell": {
       "command": "npx",
@@ -8,12 +8,12 @@
         "-p",
         "@hyperspell/hyperspell-mcp@0.38.0",
         "mcp-server",
-        "--client=claude-code"
+        "--client=claude-code",
+        "--code-blocked-methods",
+        "^memories\\.(add|addBulk|upload|update|delete)$"
       ],
       "env": {
-        "HYPERSPELL_TOKEN": "your-hyperspell-api-key",
-        "HYPERSPELL_API_KEY": "your-hyperspell-api-key",
-        "HYPERSPELL_USER_ID": "your-hyperspell-user-id"
+        "HYPERSPELL_API_KEY": "your-hyperspell-api-key"
       }
     }
   }

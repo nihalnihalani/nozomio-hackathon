@@ -115,16 +115,37 @@ Per Invariant 4 in `CLAUDE.md`, every outbound call must have a replay branch.
 ## Official MCP server
 
 ```bash
-npx -y -p @hyperspell/hyperspell-mcp@latest mcp-server
+npx -y -p @hyperspell/hyperspell-mcp@0.38.0 mcp-server
 ```
 
-with these env vars (note the names — the MCP server uses `HYPERSPELL_TOKEN`
-and `HYPERSPELL_USER_ID`, NOT the API key + email vars):
+The `-p` form is required: the scoped package's bin is named `mcp-server`,
+so plain `npx -y @hyperspell/hyperspell-mcp@0.38.0` cannot resolve the bin
+and Claude Code reports "Failed to connect" with no actionable error.
+
+with this env var (the MCP server reads ONLY `HYPERSPELL_API_KEY`;
+`HYPERSPELL_TOKEN` and `HYPERSPELL_USER_ID` are inert at the MCP layer
+even though Hyperspell's docs example sets them — confirmed by
+grepping the package source):
 
 ```
-HYPERSPELL_TOKEN=<your hs2-... API key>
-HYPERSPELL_USER_ID=<email or user identifier>
+HYPERSPELL_API_KEY=<your hs2-... API key>
 ```
+
+### Enforcing Invariant 2 at the MCP layer
+
+The Hyperspell MCP exposes only two tools (`search_docs` and `execute`).
+The `execute` tool runs arbitrary TypeScript against the SDK — including
+write methods like `client.memories.add`. To prevent agents from bypassing
+the `convex/reinforceNode.ts` chokepoint, restrict execute via:
+
+```
+--code-blocked-methods '^memories\.(add|addBulk|upload|update|delete)$'
+```
+
+This is a plain substring match on the user-submitted TS source
+(per the package's `code-tool.js`), so it's a guardrail not a hard
+sandbox — bypassable via dynamic property access, eval, etc. Useful
+defense-in-depth alongside the application-layer enforcement.
 
 This project's `.claude.json` registers it under the name `hyperspell` — you
 can verify with `claude mcp get hyperspell`. Note: the unscoped `hyperspell-
@@ -133,9 +154,10 @@ mcp` package on npm is **deprecated**; always use the scoped
 
 ## Common pitfalls
 
-- **Wrong env var names for MCP.** The MCP wants `HYPERSPELL_TOKEN`, not
-  `HYPERSPELL_API_KEY`. The two are the same value, just under different
-  variable names — set both.
+- **MCP env var.** The MCP server reads ONLY `HYPERSPELL_API_KEY`.
+  `HYPERSPELL_TOKEN` and `HYPERSPELL_USER_ID` (which appear in
+  Hyperspell's docs example) are inert at the MCP layer. Setting them
+  doesn't hurt; setting only them WILL fail with an auth error.
 - **`NoResultsForSource: vault` errors.** Informational, not a failure.
   The default `vault` source is empty until you upload documents.
 - **Source weighting shape.** It's per-source nested in `options`, not a
@@ -143,6 +165,22 @@ mcp` package on npm is **deprecated**; always use the scoped
 - **JWT expiry.** The `HYPERSPELL_USER_TOKEN` in this project's `.env`
   expires at `HYPERSPELL_USER_TOKEN_EXPIRES_AT` (~24h after issue). For
   long-lived demos, prefer the API key + X-As-User pattern.
+- **`npx` cannot resolve the MCP bin without `-p`.** The scoped package
+  `@hyperspell/hyperspell-mcp@0.38.0` exposes its bin as `mcp-server`, not
+  as the package name. `npx -y @hyperspell/hyperspell-mcp@0.38.0` fails;
+  use `npx -y -p @hyperspell/hyperspell-mcp@0.38.0 mcp-server`. Without
+  `-p`, Claude Code reports "Failed to connect" with no actionable error.
+- **`--tools` CLI arg is broken for memory-method filtering in
+  `@hyperspell/hyperspell-mcp@0.38.0`.** It only accepts the server-side
+  tool CATEGORIES `code` or `docs` (from the underlying Stainless MCP
+  framework), NOT specific MCP method names. So
+  `--tools=search,get_memory,user_info` FAILS with
+  `Argument: tools, ... Choices: code, docs`. Per-method restriction
+  needs `--code-blocked-methods` with regex against method FQNs — but it
+  only restricts methods within the "code" category. PR #2's
+  `.claude/settings.local.example.json` was already corrected in commit
+  `b57f86e fix(hyperspell): correct mcp example config` — drops the bad
+  arg.
 
 ## Where it's used in this project
 
