@@ -1,15 +1,17 @@
 {
-  "_comment": "Copy this to .claude/settings.local.json (gitignored) and fill in your Hyperspell credentials. Restart Claude Code to load the MCP server. Tools are restricted to read-only (search/get_memory/user_info) — writes to Hyperspell must go through convex/reinforce.ts per Invariant 2 in lib/hyperspell/client.ts. Version is pinned; bump deliberately.",
+  "_comment": "Copy this to .claude/settings.local.json (gitignored), fill in your Hyperspell credentials, restart Claude Code. Version is pinned; bump deliberately. NOTE: the official MCP server's --tools arg only accepts 'code' or 'docs' (server-side categories), NOT specific method names — to restrict per-method writes for Invariant 2, use --code-blocked-methods with regex patterns. For now this config exposes the default tool set; Invariant 2 (only convex/reinforceNode.ts writes triage_history) is enforced at the application layer, not the MCP layer. The bin name is mcp-server inside the scoped package — invoke via -p so npx finds it.",
   "mcpServers": {
     "hyperspell": {
       "command": "npx",
       "args": [
         "-y",
+        "-p",
         "@hyperspell/hyperspell-mcp@0.38.0",
-        "--client=claude-code",
-        "--tools=search,get_memory,user_info"
+        "mcp-server",
+        "--client=claude-code"
       ],
       "env": {
+        "HYPERSPELL_TOKEN": "your-hyperspell-api-key",
         "HYPERSPELL_API_KEY": "your-hyperspell-api-key",
         "HYPERSPELL_USER_ID": "your-hyperspell-user-id"
       }
