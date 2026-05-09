@@ -93,14 +93,28 @@ export const finalizeResult = mutation({
       citations: v.array(v.string()),
     }),
     similarIncidents: v.array(v.string()),
+    similarIncidentsDetailed: v.optional(
+      v.array(
+        v.object({
+          memory_id: v.string(),
+          summary: v.string(),
+          relevance: v.number(),
+          fromTriageHistory: v.optional(v.boolean()),
+        })
+      )
+    ),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.triageRunId, {
+    const patch: Record<string, unknown> = {
       timeline: args.timeline,
       rootCause: args.rootCause,
       suspectedFix: args.suspectedFix,
       similarIncidents: args.similarIncidents,
-    });
+    };
+    if (args.similarIncidentsDetailed) {
+      patch.similarIncidentsDetailed = args.similarIncidentsDetailed;
+    }
+    await ctx.db.patch(args.triageRunId, patch);
   },
 });
 

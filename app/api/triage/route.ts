@@ -241,6 +241,16 @@ export async function POST(req: NextRequest) {
               similarIncidents: event.result.similar_incidents.map(
                 (s) => s.memory_id
               ),
+              // Rich shape for the wow moment: needed because the
+              // useQuery-driven UI no longer parses SSE.
+              similarIncidentsDetailed: event.result.similar_incidents.map(
+                (s) => ({
+                  memory_id: s.memory_id,
+                  summary: s.summary,
+                  relevance: s.relevance,
+                  fromTriageHistory: s.fromTriageHistory,
+                })
+              ),
             })
           );
           mirror(() =>
