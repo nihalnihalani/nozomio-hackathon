@@ -24,6 +24,13 @@ export default defineSchema({
   triageRuns: defineTable({
     orgId: v.string(),
     inputTrace: v.string(),
+    // Phase 1 — `@convex-dev/agent` migration.
+    // The Agent component owns its own thread + message tables. We carry
+    // a thread reference here so the existing reactive UI (`useQuery
+    // api.triage.byId`) can be evolved in Wave 2A to consume `listMessages`
+    // + `useUIMessages` without a hard schema cutover. Optional during
+    // transition: replay-mode runs and pre-Phase-1 rows do not have one.
+    threadId: v.optional(v.string()),
     status: v.union(
       v.literal("pending"),
       v.literal("running"),

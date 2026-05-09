@@ -14,7 +14,13 @@
 
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { components, internal } from "./_generated/api";
+import { createThread } from "@convex-dev/agent";
+import type { AgentComponent } from "@convex-dev/agent";
+
+// Same loose-typing escape hatch as in `triageAgent.ts` — see comment
+// there. Once `npx convex dev` runs locally, this cast is harmless.
+const agentComponent = components.agent as unknown as AgentComponent;
 
 // ─── Mutations (public — called by both the agent action and the
 //     Next.js /api/triage mirror path via ConvexHttpClient) ──────────────────
@@ -124,22 +130,64 @@ export const finalizeResult = mutation({
  * Frontend calls `useMutation(api.triage.start)` then immediately
  * `useQuery(api.triage.byId, { id })` to subscribe to the live trace.
  * Returns the new triageRunId.
+ *
+ * Phase 1 (`@convex-dev/agent`) — dual-path scheduler:
+ *
+ *   - DEMO_MODE=replay  → schedule the legacy `runInternal` action which
+ *                          replays a fixture via `lib/agent/loop.ts:runReplay`.
+ *                          Honest hermetic-demo lifeboat (Invariant 4).
+ *   - otherwise          → create an Agent component thread, persist its
+ *                          threadId on the triageRun row, schedule the new
+ *                          `runTriage` action that uses the Agent component.
+ *
+ * Both paths return the same `triageRunId`. Frontend's `useTriage` keys
+ * on this id and is unchanged.
  */
 export const start = mutation({
   args: { orgId: v.string(), trace: v.string() },
   handler: async (ctx, args) => {
+    // Replay mode keeps the hand-rolled loop. The Agent component runs
+    // LIVE only — replay's deterministic fixtures are the demo lifeboat
+    // (Invariant 4 — Hermetic Demo Mode).
+    const demoMode = process.env.DEMO_MODE ?? "replay";
+    const useAgent = demoMode !== "replay";
+
+    let threadId: string | undefined;
+    if (useAgent) {
+      // Create the agent thread synchronously inside the mutation so the
+      // scheduled action can `continueThread` against it. `userId = orgId`
+      // wires Phase-4 RAG (`searchOtherThreads`) so prior triages from the
+      // same org surface naturally as context.
+      threadId = await createThread(ctx, agentComponent, {
+        userId: args.orgId,
+        title: `Triage: ${args.trace.slice(0, 60)}`,
+      });
+    }
+
     const id = await ctx.db.insert("triageRuns", {
       orgId: args.orgId,
       inputTrace: args.trace,
       status: "pending",
       startedAt: Date.now(),
+      ...(threadId ? { threadId } : {}),
     });
-    // Schedule the Node-runtime agent action; UI subscribes via useQuery.
-    await ctx.scheduler.runAfter(0, internal.triageNode.runInternal, {
-      triageRunId: id,
-      orgId: args.orgId,
-      trace: args.trace,
-    });
+
+    if (useAgent && threadId) {
+      // New live path: agent component runs the loop.
+      await ctx.scheduler.runAfter(0, internal.triageNode.runTriage, {
+        triageRunId: id,
+        orgId: args.orgId,
+        trace: args.trace,
+        threadId,
+      });
+    } else {
+      // Replay path: keep the existing hand-rolled fixture-driven runner.
+      await ctx.scheduler.runAfter(0, internal.triageNode.runInternal, {
+        triageRunId: id,
+        orgId: args.orgId,
+        trace: args.trace,
+      });
+    }
     return id;
   },
 });
