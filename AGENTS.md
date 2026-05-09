@@ -88,6 +88,11 @@ slash commands in Claude Code.
   `seed/` and `data/replay/` bundling problem — Convex's sandbox
   doesn't have those files. The current architecture (agent in Next.js,
   UI subscribes to Convex) sidesteps this.
+- **Don't start the `@convex-dev/agent` migration mid-demo.** The full
+  plan is documented in `convexplan.md` (6 phases, ~10h, breaks ~15
+  tests). Useful post-hackathon. Mid-demo it would replace the working
+  agent loop with an unverified path that depends on AI SDK v5 +
+  Anthropic API key (neither currently set up).
 
 ## See also
 
@@ -97,3 +102,6 @@ slash commands in Claude Code.
 - `IDEAS.md` — the 9-agent squad output that produced Triage
 - `.agents/skills/hyperspell/SKILL.md` — Hyperspell quickstart with
   the MCP gotchas (the `--tools` arg bug, the `-p` flag for npx)
+- `convexplan.md` — Convex 2026 feature adoption plan (post-hackathon)
+- `.agents/skills/convex-migration/SKILL.md` — skill summary of the
+  migration plan
