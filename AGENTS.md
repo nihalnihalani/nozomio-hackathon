@@ -52,6 +52,9 @@ Test files in `tests/invariants/` enforce all 4. Run
 - `convex/{triageNode,reinforceNode,toolsNode}.ts` — Node-runtime
   agent actions (separate files because `"use node"` files can only
   contain actions, not mutations/queries)
+- `convex/observability.ts` — module-scope OTel provider that exports
+  AI SDK `gen_ai` spans to PostHog LLM Analytics; no-op without
+  `POSTHOG_API_KEY`. Imported for side effects from `convex/triageNode.ts`.
 - `lib/hooks/useTriage.ts` — frontend hook; uses `useQuery` against
   Convex when `NEXT_PUBLIC_CONVEX_URL` is set, falls back to SSE otherwise
 

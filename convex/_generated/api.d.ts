@@ -15,6 +15,7 @@ import type * as tools from "../tools.js";
 import type * as toolsNode from "../toolsNode.js";
 import type * as traceState from "../traceState.js";
 import type * as triage from "../triage.js";
+import type * as triageAgent from "../triageAgent.js";
 import type * as triageNode from "../triageNode.js";
 
 import type {
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   toolsNode: typeof toolsNode;
   traceState: typeof traceState;
   triage: typeof triage;
+  triageAgent: typeof triageAgent;
   triageNode: typeof triageNode;
 }>;
 
@@ -60,4 +62,11 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+/**
+ * Components registry. Until `npx convex dev` regenerates this file
+ * locally, we type `components` loosely so `components.agent` (registered
+ * in `convex/convex.config.ts`) typechecks. Live codegen will overwrite
+ * this with a precise type.
+ */
+import type { AnyApi } from "convex/server";
+export declare const components: AnyApi;

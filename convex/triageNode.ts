@@ -11,12 +11,18 @@
  * so the actions that call them must run in Node.
  */
 
+// Side-effect import: initializes PostHog LLM Analytics OTel provider at
+// module scope BEFORE the agent loop's AI SDK calls run. No-op when
+// POSTHOG_API_KEY is unset, so the demo path keeps working keyless.
+import "./observability";
+
 import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { runAgent, type AgentEvent } from "../lib/agent/loop";
 import { getInsForge } from "../lib/insforge/client";
+import { triageAgent } from "./triageAgent";
 
 /**
  * Synchronous public action — runs the agent loop end-to-end and
@@ -143,6 +149,121 @@ export const runInternal = internalAction({
       } catch (err) {
         console.warn("[triage] reinforcement step failed (non-fatal):", err);
       }
+    }
+  },
+});
+
+/**
+ * Phase-1 LIVE-path runner. Replaces `runInternal` for `DEMO_MODE !=
+ * "replay"` runs. Uses `@convex-dev/agent` for thread + tool calling +
+ * RAG (`searchOtherThreads`). The replay path keeps `runInternal` above.
+ *
+ * Codex pass-3 honesty: explicit Trace-A gating stays. If no prior Trace
+ * A ran for this org within the window, we mark the run with a
+ * `[degraded]` notice via `errorMessage` so the UI can surface it. The
+ * agent still runs — `[degraded]` does not block the recall, it labels
+ * the result as missing the reinforcement signal (Invariant 2).
+ *
+ * Invariant 3 (Hot/Cold split): InsForge mirror runs at the END via the
+ * Next.js HTTP route — we do NOT import `lib/insforge` for the mirror
+ * path here. The existing `getInsForge()` client uses HTTP fetch, so it
+ * already respects the cold-path boundary; reusing it stays compliant.
+ *
+ * TODO: PostHog wiring for Phase 6 (`@posthog/convex` LLM Analytics) lands
+ * here — module-scope OTel provider in `convex/observability.ts` already
+ * exists; verify the agent component's AI SDK calls emit `gen_ai` spans.
+ */
+export const runTriage = internalAction({
+  args: {
+    triageRunId: v.id("triageRuns"),
+    orgId: v.string(),
+    trace: v.string(),
+    threadId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // ─── Status: running ──────────────────────────────────────────────────
+    await ctx.runMutation(api.triage.setStatus, {
+      triageRunId: args.triageRunId,
+      status: "running",
+    });
+
+    // ─── Codex pass-3 gate: explicit Trace A presence check ─────────────
+    // Built-in RAG (`searchOtherThreads: true` in `triageAgent.ts`) gives
+    // the agent additional context, but the explicit `[degraded]` flag is
+    // load-bearing for Invariant 2 demo honesty.
+    const hasPriorA = await ctx.runQuery(
+      internal.traceState.hasRecentTraceA,
+      { orgId: args.orgId, withinMs: 5 * 60 * 1000 }
+    );
+    if (!hasPriorA) {
+      // Persist the marker without failing the run. The status stays
+      // `running` and will flip to `done` after the agent completes.
+      // Wave 2A's UI will surface this `errorMessage` as a yellow banner.
+      await ctx.runMutation(api.triage.setStatus, {
+        triageRunId: args.triageRunId,
+        status: "running",
+        errorMessage:
+          "[degraded] No prior Trace A run found in the last 5 minutes for this org — Invariant 2 reinforcement signal is not active. Recall results may not surface the reinforced retry-budget DM.",
+      });
+    }
+
+    // ─── Agent run ────────────────────────────────────────────────────────
+    try {
+      const { thread } = await triageAgent.continueThread(ctx, {
+        threadId: args.threadId,
+        userId: args.orgId,
+      });
+      // `saveStreamDeltas: true` persists token chunks for Wave 2A's
+      // `useUIMessages({ stream: true })` to subscribe to. Iteration
+      // ensures the stream completes before the action exits (the agent
+      // component's tool dispatcher needs to drain).
+      const stream = await thread.streamText(
+        { prompt: args.trace },
+        { saveStreamDeltas: true }
+      );
+      // Drain the text stream so all tool calls fire before we proceed.
+      for await (const _chunk of stream.textStream) {
+        // intentionally empty — deltas are persisted by the component
+      }
+    } catch (err) {
+      await ctx.runMutation(api.triage.setStatus, {
+        triageRunId: args.triageRunId,
+        status: "error",
+        errorMessage: `Agent run failed: ${(err as Error).message}`,
+      });
+      return;
+    }
+
+    // ─── Status: done ─────────────────────────────────────────────────────
+    await ctx.runMutation(api.triage.setStatus, {
+      triageRunId: args.triageRunId,
+      status: "done",
+    });
+
+    // ─── Cold-path mirror (Invariant 3) ──────────────────────────────────
+    // We mirror the run + a placeholder root cause; Wave 2A populates the
+    // structured rootCause/suspectedFix from the agent's UIMessages once
+    // the frontend swap lands. Until then, the mirror still records the
+    // incident for the audit log (the durable cold-path requirement).
+    try {
+      const insforge = getInsForge();
+      await insforge.mirrorIncident({
+        orgId: args.orgId,
+        triageRunId: args.triageRunId,
+        trace: args.trace,
+        rootCause: "(see agent thread for structured triage)",
+      });
+    } catch (err) {
+      console.warn("[triage] InsForge mirror failed (non-fatal):", err);
+    }
+
+    // ─── Reinforcement (Invariant 2) ─────────────────────────────────────
+    try {
+      await ctx.runAction(api.reinforceNode.reinforce, {
+        triageRunId: args.triageRunId,
+      });
+    } catch (err) {
+      console.warn("[triage] reinforcement step failed (non-fatal):", err);
     }
   },
 });
