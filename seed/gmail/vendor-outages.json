@@ -1,0 +1,33 @@
+{
+  "_comment": "Synthetic data. Fictional Acme Billing inbox. No real PII or production routing. 4 vendor-outage threads — 2 from Stripe (one near 2024-01-14, one near today), 1 from AWS, 1 from Datadog.",
+  "threads": [
+    {
+      "id": "gmail_thread_001",
+      "from": "noreply@stripe.com",
+      "subject": "[Stripe Status] Elevated webhook delivery latency",
+      "ts": "2024-01-14T21:42:18Z",
+      "snippet": "We are currently investigating elevated latency in webhook delivery for a subset of accounts. Some webhooks may be delivered with delay or retried multiple times. We will share an update within 30 minutes. Status page: https://status.stripe.com"
+    },
+    {
+      "id": "gmail_thread_002",
+      "from": "noreply@stripe.com",
+      "subject": "[Stripe Status] Resolved: Elevated webhook delivery latency",
+      "ts": "2024-01-15T00:11:55Z",
+      "snippet": "The earlier webhook-delivery latency issue has been fully mitigated as of 23:58 UTC. During the incident, some events may have been delivered more than once due to retry logic. Per our documentation, integrators should ensure event handlers are idempotent. We apologize for any disruption."
+    },
+    {
+      "id": "gmail_thread_003",
+      "from": "no-reply@aws.amazon.com",
+      "subject": "AWS Health Dashboard: Increased error rates for EC2 in us-west-2 (AZ usw2-az3)",
+      "ts": "2024-04-29T08:33:42Z",
+      "snippet": "We are investigating increased EC2 instance launch error rates in availability zone usw2-az3. Existing instances are unaffected. Workloads using multi-AZ deployments should not see customer impact. Current status and updates available on the AWS Health Dashboard."
+    },
+    {
+      "id": "gmail_thread_004",
+      "from": "support@datadoghq.com",
+      "subject": "[Datadog Status] Delayed metric ingestion in US1",
+      "ts": "2024-05-09T03:38:09Z",
+      "snippet": "We are observing delayed metric ingestion across the US1 region affecting custom metrics, log-based metrics, and some integration metrics. Dashboards and monitors may show stale data for 5-15 minutes. Investigation ongoing. Subscribe to status updates at status.datadoghq.com."
+    }
+  ]
+}

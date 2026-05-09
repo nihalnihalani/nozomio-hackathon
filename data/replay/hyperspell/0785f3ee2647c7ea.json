@@ -1,0 +1,40 @@
+{
+  "_query": "Duplicate charge processed Stripe webhook",
+  "_note": "Trace A's recall fixture. NOTE: the retry-budget DM is intentionally NOT in this set — that's the memory the reinforcement step makes hot for Trace B. See Invariant 2.",
+  "memories": [
+    {
+      "id": "mem_slk_jan14_thread_001",
+      "text": "Stripe webhook flaking, investigating duplicate charge events from cus_** — looks like the retry path hits processCharge twice when our 200 ack is slow.",
+      "source": "slack",
+      "metadata": {
+        "channel": "#incidents",
+        "author": "oncall",
+        "ts": "2024-01-14T03:51:08Z",
+        "thread_id": "T_jan14_stripe_regression"
+      },
+      "score": 0.94
+    },
+    {
+      "id": "mem_ntn_pm_2024_01_14",
+      "text": "Postmortem 2024-01-14 — Stripe webhook regression. Root cause: handler does not check idempotency on retried webhook deliveries. Action items: (1) wire lib/idempotency.ts into webhooks/stripe.ts retry branch, (2) ADR-007 governs key format.",
+      "source": "notion",
+      "metadata": {
+        "doc_id": "pm_2024_01_14_stripe_webhook_regression",
+        "author": "eng-lead",
+        "ts": "2024-01-15T17:22:00Z"
+      },
+      "score": 0.91
+    },
+    {
+      "id": "mem_ntn_adr_007",
+      "text": "ADR-007 — Idempotency keys for Stripe webhooks. We standardize on `${event.id}:${event.type}` as the key; lib/idempotency.ts.has() must be called before any side-effecting processCharge/processRefund.",
+      "source": "notion",
+      "metadata": {
+        "doc_id": "adr_007_idempotency_keys",
+        "author": "eng-lead",
+        "ts": "2024-01-22T10:04:00Z"
+      },
+      "score": 0.83
+    }
+  ]
+}

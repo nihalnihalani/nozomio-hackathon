@@ -17,9 +17,11 @@ pnpm-debug.log*
 out/
 build/
 dist/
+next-env.d.ts
+tsconfig.tsbuildinfo
 
 # Convex
-.convex/
+convex/_generated/
 
 # Vercel
 .vercel/
@@ -41,3 +43,12 @@ logs/
 
 # Testing
 coverage/
+.vitest-cache/
+
+# Demo backup video (large; generated)
+docs/demo-backup.mp4
+
+# Replay-mode generated artifacts (logs / markers)
+data/replay/hyperspell/_writes.log
+data/replay/hyperspell/_ingest-log.json
+data/replay/hyperspell/.ingest-complete

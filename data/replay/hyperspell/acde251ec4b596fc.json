@@ -1,0 +1,17 @@
+{
+  "_query": "billing service latency",
+  "_note": "Control fixture — should NOT influence the demo path. Used to validate that unrelated queries surface unrelated memories (signal-vs-noise check).",
+  "memories": [
+    {
+      "id": "mem_ntn_pm_2024_03_07",
+      "text": "Postmortem 2024-03-07 — billing-service latency spike. Root cause: connection pool exhaustion under load; unrelated to webhook idempotency. Action: raise pool to 50, add p99 alert.",
+      "source": "notion",
+      "metadata": {
+        "doc_id": "pm_2024_03_07_billing_latency",
+        "author": "eng-lead",
+        "ts": "2024-03-08T09:11:00Z"
+      },
+      "score": 0.88
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "_doc": "Map of Hyperspell query hash -> fixture file. Hash is computed by lib/hyperspell/client.ts via hashKey() — see ./README.md.",
+  "_hash_inputs": "JSON.stringify({ q: query, w: source_weights, l: limit }) hashed with sha1, first 16 hex chars.",
+  "_default_weights": { "slack": 0.5, "notion": 0.4, "gmail": 0.1 },
+  "_default_limit": 5,
+  "queries": {
+    "Duplicate charge processed Stripe webhook": "0785f3ee2647c7ea.json",
+    "Duplicate refund event Stripe webhook": "f8cc5280f1715d98.json",
+    "idempotency keys retry budget": "d9fb4bf52b2c385a.json",
+    "billing service latency": "acde251ec4b596fc.json"
+  }
+}

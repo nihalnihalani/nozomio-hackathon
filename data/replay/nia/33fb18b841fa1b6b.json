@@ -1,0 +1,38 @@
+{
+  "_query": "processWebhook stripe.ts retry idempotency",
+  "_note": "Trace A code search. Returns the buggy line 84 + ADR-007 + idempotency.ts helper.",
+  "snippets": [
+    {
+      "file": "webhooks/stripe.ts",
+      "line": 84,
+      "content": "if (event.retry) {\n  // BUG: missing idempotency check on retry path\n  await processCharge(event);\n}",
+      "citation_url": "https://github.com/acme-billing/billing-service/blob/main/webhooks/stripe.ts#L84"
+    },
+    {
+      "file": "lib/idempotency.ts",
+      "line": 21,
+      "content": "async has(key: string): Promise<boolean> {\n  const { rows } = await db.query(\n    \"select 1 from webhook_events where event_id = $1 limit 1\",\n    [key],\n  );\n  return rows.length > 0;\n}",
+      "citation_url": "https://github.com/acme-billing/billing-service/blob/main/lib/idempotency.ts#L21"
+    },
+    {
+      "file": "docs/ADR-007-idempotency-keys.md",
+      "line": 25,
+      "content": "Every Stripe webhook handler MUST consult a persistent idempotency check on event.id before performing any side effect, on every code path including retry paths.",
+      "citation_url": "https://github.com/acme-billing/billing-service/blob/main/docs/ADR-007-idempotency-keys.md#L25"
+    }
+  ],
+  "recent_commits": [
+    {
+      "sha": "a3f8e9c1b27c",
+      "author": "eng-lead",
+      "date": "2024-01-15T18:02:00Z",
+      "message": "fix(stripe): add retry handling to processWebhook (does NOT add idempotency check — see follow-up)"
+    },
+    {
+      "sha": "bd4f1102aa0e",
+      "author": "oncall",
+      "date": "2024-02-20T11:31:00Z",
+      "message": "WIP: retry budget for stripe webhook (REVERTED)"
+    }
+  ]
+}

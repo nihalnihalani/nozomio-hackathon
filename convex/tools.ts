@@ -1,98 +1,119 @@
-import { action } from "./_generated/server";
+/**
+ * Convex-side wrappers for the two agent tools.
+ *
+ * These are NOT the AI-SDK `tool()` definitions used inside the agent
+ * loop — those live in lib/agent/loop.ts. These are Convex actions that
+ * other Convex code (or the dashboard) can invoke directly to:
+ *   1. exercise Hyperspell / Nia outside the agent loop (debug, scripts)
+ *   2. log tool calls to the toolCalls table for the live trace UI
+ *
+ * Invariant 1 (Cite-Or-Die): every tool call here returns the same
+ * shape as the in-agent tool — citations carry `verified` flags.
+ * Invariant 4 (Hermetic Demo Mode): the underlying clients silently
+ * fall back to replay if keys are missing.
+ */
+
 import { v } from "convex/values";
+import { action, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { getHyperspell, SOURCE_WEIGHTS } from "../lib/hyperspell/client";
+import { getNia } from "../lib/nia/client";
 
-const HYPERSPELL_URL = "https://api.hyperspell.com/memories/query";
-const NIA_SEARCH_URL = "https://apigcp.trynia.ai/v2/search";
+// ─── Internal logging mutation ────────────────────────────────────────────────
 
-export const recallSimilarIncidents = action({
+/**
+ * Persist a tool invocation to the toolCalls table. Called by the
+ * tool actions below AND by the agent loop in convex/triage.ts.
+ *
+ * Internal-only (not exposed to the frontend) because the frontend
+ * never directly writes to toolCalls — that would let the UI fake
+ * agent reasoning. `useQuery(api.triage.byId)` is the read-side.
+ */
+export const logToolCall = internalMutation({
   args: {
-    query: v.string(),
-    maxResults: v.optional(v.number()),
-    sources: v.optional(v.array(v.string())),
+    triageRunId: v.id("triageRuns"),
+    tool: v.union(
+      v.literal("recallSimilarIncidents"),
+      v.literal("searchCode")
+    ),
+    input: v.any(),
+    output: v.any(),
+    latencyMs: v.number(),
   },
-  handler: async (_ctx, args) => {
-    const token = process.env.HYPERSPELL_USER_TOKEN;
-    if (!token) throw new Error("HYPERSPELL_USER_TOKEN not set in Convex env");
-
-    const body: Record<string, unknown> = {
-      query: args.query,
-      max_results: args.maxResults ?? 5,
-    };
-    if (args.sources && args.sources.length > 0) {
-      body.sources = args.sources;
-    }
-
-    const startedAt = Date.now();
-    const res = await fetch(HYPERSPELL_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("toolCalls", {
+      triageRunId: args.triageRunId,
+      tool: args.tool,
+      input: args.input,
+      output: args.output,
+      latencyMs: args.latencyMs,
+      at: Date.now(),
     });
-    const latencyMs = Date.now() - startedAt;
-
-    const text = await res.text();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = { raw: text };
-    }
-
-    if (!res.ok) {
-      throw new Error(`Hyperspell ${res.status} (${latencyMs}ms): ${text}`);
-    }
-
-    return { latencyMs, data: parsed };
   },
 });
 
+// ─── Tool: recallSimilarIncidents ─────────────────────────────────────────────
+
+/**
+ * Hyperspell memories.search wrapper.
+ * Returns memories with source weighting tuned for SRE incidents.
+ * Logs the call against `triageRunId` if provided.
+ */
+export const recallSimilarIncidents = action({
+  args: {
+    signature: v.string(),
+    triageRunId: v.optional(v.id("triageRuns")),
+  },
+  handler: async (ctx, args) => {
+    const start = Date.now();
+    const hyperspell = getHyperspell();
+    const result = await hyperspell.memories.search({
+      query: args.signature,
+      options: { source_weights: SOURCE_WEIGHTS, limit: 5 },
+    });
+    const latencyMs = Date.now() - start;
+    if (args.triageRunId) {
+      await ctx.runMutation(internal.tools.logToolCall, {
+        triageRunId: args.triageRunId,
+        tool: "recallSimilarIncidents",
+        input: { signature: args.signature },
+        output: result,
+        latencyMs,
+      });
+    }
+    return result;
+  },
+});
+
+// ─── Tool: searchCode ─────────────────────────────────────────────────────────
+
+/**
+ * Nia /v2/search wrapper. Snippets are run through the cite-or-die
+ * verifier inside lib/nia/client.ts before being returned (Invariant 1).
+ */
 export const searchCode = action({
   args: {
     query: v.string(),
-    repositories: v.optional(v.array(v.string())),
+    triageRunId: v.optional(v.id("triageRuns")),
   },
-  handler: async (_ctx, args) => {
-    const apiKey = process.env.NIA_API_KEY;
-    if (!apiKey) throw new Error("NIA_API_KEY not set in Convex env");
-
-    const body: Record<string, unknown> = {
+  handler: async (ctx, args) => {
+    const start = Date.now();
+    const nia = getNia();
+    const result = await nia.search({
+      query: args.query,
       mode: "query",
-      messages: [{ role: "user", content: args.query }],
       include_sources: true,
-      fast_mode: true,
-      skip_llm: true,
-    };
-    if (args.repositories && args.repositories.length > 0) {
-      body.repositories = args.repositories;
-      body.search_mode = "repositories";
-    }
-
-    const startedAt = Date.now();
-    const res = await fetch(NIA_SEARCH_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
     });
-    const latencyMs = Date.now() - startedAt;
-
-    const text = await res.text();
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = { raw: text };
+    const latencyMs = Date.now() - start;
+    if (args.triageRunId) {
+      await ctx.runMutation(internal.tools.logToolCall, {
+        triageRunId: args.triageRunId,
+        tool: "searchCode",
+        input: { query: args.query },
+        output: result,
+        latencyMs,
+      });
     }
-
-    if (!res.ok) {
-      throw new Error(`Nia ${res.status} (${latencyMs}ms): ${text}`);
-    }
-
-    return { latencyMs, data: parsed };
+    return result;
   },
 });
