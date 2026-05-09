@@ -147,6 +147,14 @@ async function appendReplayWrite(input: AddMemoryInput): Promise<void> {
 // ─── Live branches ────────────────────────────────────────────────────────────
 
 interface LiveSearchResponseRaw {
+  documents?: Array<{
+    source?: string;
+    resource_id?: string;
+    title?: string | null;
+    metadata?: Record<string, unknown>;
+    memories?: string[];
+    score?: number;
+  }>;
   results?: Array<{
     id?: string;
     memory_id?: string;
@@ -158,31 +166,47 @@ interface LiveSearchResponseRaw {
   }>;
 }
 
+function hyperspellHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    authorization: `Bearer ${process.env.HYPERSPELL_API_KEY!}`,
+  };
+  const asUser = process.env.HYPERSPELL_AS_USER ??
+    (process.env.HYPERSPELL_ACCOUNT_EMAIL
+      ? `sandbox:${process.env.HYPERSPELL_ACCOUNT_EMAIL}`
+      : undefined);
+  if (asUser) headers["X-As-User"] = asUser;
+  return headers;
+}
+
+function normalizeSource(source: string | undefined): SourceType | undefined {
+  if (source === "google_mail") return "gmail";
+  if (source === "slack" || source === "notion" || source === "gmail") {
+    return source;
+  }
+  return undefined;
+}
+
 async function liveSearch(input: SearchInput): Promise<SearchResult> {
-  const apiKey = process.env.HYPERSPELL_API_KEY!;
   const body = {
     query: input.query,
-    options: {
-      source_weights: input.options?.source_weights ?? DEFAULT_SOURCE_WEIGHTS,
-      limit: input.options?.limit ?? 5,
-    },
+    answer: false,
+    effort: "minimal",
+    max_results: input.options?.limit ?? 5,
   };
-  const res = await fetch(`${HYPERSPELL_API_BASE}/v1/memories/search`, {
+  const res = await fetch(`${HYPERSPELL_API_BASE}/memories/query`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    },
+    headers: hyperspellHeaders(),
     body: JSON.stringify(body),
   });
   if (!res.ok) {
     throw new Error(`hyperspell search ${res.status}: ${await res.text()}`);
   }
   const json = (await res.json()) as LiveSearchResponseRaw;
-  const memories: Memory[] = (json.results ?? []).flatMap((r) => {
-    const id = r.id ?? r.memory_id;
-    const text = r.text ?? r.content;
-    const source = r.source as SourceType | undefined;
+  const documentMemories: Memory[] = (json.documents ?? []).flatMap((r) => {
+    const source = normalizeSource(r.source);
+    const id = r.resource_id;
+    const text = r.memories?.[0] ?? r.title ?? undefined;
     if (!id || !text || !source) return [];
     const safe = MemorySchema.safeParse({
       id,
@@ -193,24 +217,38 @@ async function liveSearch(input: SearchInput): Promise<SearchResult> {
     });
     return safe.success ? [safe.data] : [];
   });
-  return { memories };
+  const legacyMemories: Memory[] = (json.results ?? []).flatMap((r) => {
+    const id = r.id ?? r.memory_id;
+    const text = r.text ?? r.content;
+    const source = normalizeSource(r.source);
+    if (!id || !text || !source) return [];
+    const safe = MemorySchema.safeParse({
+      id,
+      text,
+      source,
+      metadata: r.metadata,
+      score: r.score,
+    });
+    return safe.success ? [safe.data] : [];
+  });
+  return { memories: documentMemories.length > 0 ? documentMemories : legacyMemories };
 }
 
 async function liveAdd(input: AddMemoryInput): Promise<{ id: string }> {
-  const apiKey = process.env.HYPERSPELL_API_KEY!;
-  const res = await fetch(`${HYPERSPELL_API_BASE}/v1/memories`, {
+  const metadata = {
+    ...(input.metadata ?? {}),
+    source: input.source,
+  };
+  const res = await fetch(`${HYPERSPELL_API_BASE}/memories/add`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(input),
+    headers: hyperspellHeaders(),
+    body: JSON.stringify({ text: input.text, metadata }),
   });
   if (!res.ok) {
     throw new Error(`hyperspell add ${res.status}: ${await res.text()}`);
   }
-  const json = (await res.json()) as { id?: string; memory_id?: string };
-  const id = json.id ?? json.memory_id;
+  const json = (await res.json()) as { id?: string; memory_id?: string; resource_id?: string };
+  const id = json.id ?? json.memory_id ?? json.resource_id;
   if (!id) throw new Error("hyperspell add: response missing id");
   return { id };
 }

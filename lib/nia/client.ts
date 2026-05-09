@@ -185,8 +185,9 @@ interface LiveNiaResponseRaw {
 async function liveSearch(input: NiaSearchInput): Promise<SearchCodeOutput> {
   const apiKey = process.env.NIA_API_KEY!;
   const body = {
-    query: input.query,
     mode: input.mode ?? "query",
+    messages: [{ role: "user", content: input.query }],
+    search_mode: "unified",
     include_sources: input.include_sources ?? true,
   };
   const res = await fetch(`${NIA_API_BASE}/v2/search`, {
