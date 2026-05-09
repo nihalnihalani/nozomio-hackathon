@@ -1,0 +1,69 @@
+{
+  "_query": "Duplicate refund event Stripe webhook",
+  "_note": "Trace B's recall fixture — THE WOW MOMENT. Two extra memories vs Trace A: (a) the retry-budget DM from Feb 18 surfaces because reinforcement made it hot; (b) the triage_history reinforcement event mem_reinforce_* proves the agent has triaged this cluster before. Invariant 2.",
+  "memories": [
+    {
+      "id": "mem_slk_jan14_thread_001",
+      "text": "Stripe webhook flaking, investigating duplicate charge events from cus_** — looks like the retry path hits processCharge twice when our 200 ack is slow.",
+      "source": "slack",
+      "metadata": {
+        "channel": "#incidents",
+        "author": "oncall",
+        "ts": "2024-01-14T03:51:08Z",
+        "thread_id": "T_jan14_stripe_regression"
+      },
+      "score": 0.93
+    },
+    {
+      "id": "mem_ntn_pm_2024_01_14",
+      "text": "Postmortem 2024-01-14 — Stripe webhook regression. Root cause: handler does not check idempotency on retried webhook deliveries. Action items: (1) wire lib/idempotency.ts into webhooks/stripe.ts retry branch, (2) ADR-007 governs key format.",
+      "source": "notion",
+      "metadata": {
+        "doc_id": "pm_2024_01_14_stripe_webhook_regression",
+        "author": "eng-lead",
+        "ts": "2024-01-15T17:22:00Z"
+      },
+      "score": 0.92
+    },
+    {
+      "id": "mem_ntn_adr_007",
+      "text": "ADR-007 — Idempotency keys for Stripe webhooks. We standardize on `${event.id}:${event.type}` as the key; lib/idempotency.ts.has() must be called before any side-effecting processCharge/processRefund.",
+      "source": "notion",
+      "metadata": {
+        "doc_id": "adr_007_idempotency_keys",
+        "author": "eng-lead",
+        "ts": "2024-01-22T10:04:00Z"
+      },
+      "score": 0.84
+    },
+    {
+      "id": "mem_slk_dm_feb18_retry_budget",
+      "text": "DM oncall→eng-lead, Feb 18: 'we should add a retry budget on idempotency keys, this'll bite us again — both processCharge AND processRefund use the same hot path and neither is wrapped'.",
+      "source": "slack",
+      "metadata": {
+        "channel": "DM",
+        "author": "oncall",
+        "ts": "2024-02-18T22:14:51Z",
+        "thread_id": "DM_oncall_eng_lead",
+        "_planted_for_demo": true
+      },
+      "score": 0.89
+    },
+    {
+      "id": "mem_reinforce_traceA_idempotency_cluster",
+      "text": "User triaged idempotency-key incident in webhooks/stripe.ts — reinforced this cluster. Reinforced memory_ids: [mem_slk_jan14_thread_001, mem_ntn_pm_2024_01_14, mem_ntn_adr_007]. Triage outcome: suspected_fix at webhooks/stripe.ts:84 (idempotency check missing on retry).",
+      "source": "slack",
+      "metadata": {
+        "kind": "triage_history",
+        "reinforces": [
+          "mem_slk_jan14_thread_001",
+          "mem_ntn_pm_2024_01_14",
+          "mem_ntn_adr_007"
+        ],
+        "triage_run_id": "tr_demo_trace_a",
+        "ts": "2024-05-09T03:47:30Z"
+      },
+      "score": 0.78
+    }
+  ]
+}

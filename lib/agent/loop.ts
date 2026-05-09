@@ -127,12 +127,17 @@ function pickFixture(
   }
   const lower = trace.toLowerCase();
   // Prefer the most-specific (longest-pattern) match.
+  // Invariant 1 (Cite-Or-Die): if NOTHING matches, return null and let the
+  // caller emit an error. We do NOT silently fall back to fixtures[0] —
+  // that would surface Trace A's full triage in response to bogus input,
+  // which is the textbook fabricated-citation failure mode the invariant
+  // exists to prevent.
   const matches = fixtures
     .filter((f) => lower.includes(f.input_trace_pattern.toLowerCase()))
     .sort(
       (a, b) => b.input_trace_pattern.length - a.input_trace_pattern.length
     );
-  return matches[0] ?? fixtures[0] ?? null;
+  return matches[0] ?? null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -159,11 +164,15 @@ async function runReplay(
   const fixtures = await loadFixtures();
   const fixture = pickFixture(fixtures, input.trace, input.fixtureHint);
   if (!fixture) {
+    // Invariant 1 (Cite-Or-Die): no match → no fabricated citations. Surface
+    // a useful, judge-friendly error and stop. The frontend renders this as
+    // a status:error card.
     await emit({
       type: "error",
       message:
-        "No replay fixture matched. Ask the Replay+Test Engineer to add one in data/replay/.",
+        "This stack trace doesn't match any known fixture. Try the Trace A or Trace B sample buttons, or run the project in live mode with real Hyperspell + Nia keys.",
     });
+    await emit({ type: "status", status: "error" });
     return null;
   }
 
@@ -186,9 +195,32 @@ async function runReplay(
     }
   }
 
-  await emit({ type: "result", result: fixture.result });
+  // Invariant 2 (Memory Reinforcement): tag similar_incidents whose source
+  // memory was either reinforced by a prior triage (id starts with
+  // `mem_reinforce_`) OR was added as a `triage_history` entry. The frontend
+  // renders these with a 🧠 badge so judges can see "this incident was
+  // surfaced because the agent already triaged this kind of thing."
+  const recalledMemoriesById = new Map<string, Memory>();
+  for (const tc of fixture.tool_calls) {
+    if (tc.tool !== "recallSimilarIncidents") continue;
+    const out = tc.output as { memories?: Memory[] };
+    for (const m of out.memories ?? []) recalledMemoriesById.set(m.id, m);
+  }
+  const enrichedResult: TriageResult = {
+    ...fixture.result,
+    similar_incidents: fixture.result.similar_incidents.map((si) => {
+      const mem = recalledMemoriesById.get(si.memory_id);
+      const isHistory =
+        si.memory_id.startsWith("mem_reinforce_") ||
+        (mem?.metadata as { kind?: string } | undefined)?.kind ===
+          "triage_history";
+      return isHistory ? { ...si, fromTriageHistory: true } : si;
+    }) as TriageResult["similar_incidents"],
+  };
+
+  await emit({ type: "result", result: enrichedResult });
   await emit({ type: "status", status: "done" });
-  return fixture.result;
+  return enrichedResult;
 }
 
 /**

@@ -1,0 +1,203 @@
+{
+  "_doc": "Trace B — THE WOW MOMENT (Invariant 2). Issued ~90s after Trace A. Recall surfaces the planted retry-budget DM that Trace A's recall did NOT — that's the visible reinforcement signal. Tool-call latencies are deliberately faster than Trace A: 'second triage is faster' is falsifiable in delay_ms.",
+  "input_trace_pattern": "Duplicate refund event",
+  "tool_calls": [
+    {
+      "tool": "recallSimilarIncidents",
+      "input": {
+        "signature": "Duplicate refund event Stripe webhook"
+      },
+      "output": {
+        "memories": [
+          {
+            "id": "mem_slk_jan14_thread_001",
+            "text": "Stripe webhook flaking, investigating duplicate charge events from cus_** — looks like the retry path hits processCharge twice when our 200 ack is slow.",
+            "source": "slack",
+            "metadata": {
+              "channel": "#incidents",
+              "author": "oncall",
+              "ts": "2024-01-14T03:51:08Z",
+              "thread_id": "T_jan14_stripe_regression"
+            },
+            "score": 0.93
+          },
+          {
+            "id": "mem_ntn_pm_2024_01_14",
+            "text": "Postmortem 2024-01-14 — Stripe webhook regression. Root cause: handler does not check idempotency on retried webhook deliveries.",
+            "source": "notion",
+            "metadata": {
+              "doc_id": "pm_2024_01_14_stripe_webhook_regression",
+              "author": "eng-lead",
+              "ts": "2024-01-15T17:22:00Z"
+            },
+            "score": 0.92
+          },
+          {
+            "id": "mem_ntn_adr_007",
+            "text": "ADR-007 — Idempotency keys for Stripe webhooks. lib/idempotency.ts.has() must be called before any side-effecting processCharge/processRefund.",
+            "source": "notion",
+            "metadata": {
+              "doc_id": "adr_007_idempotency_keys",
+              "author": "eng-lead",
+              "ts": "2024-01-22T10:04:00Z"
+            },
+            "score": 0.84
+          },
+          {
+            "id": "mem_slk_dm_feb18_retry_budget",
+            "text": "DM oncall→eng-lead, Feb 18: 'we should add a retry budget on idempotency keys, this'll bite us again — both processCharge AND processRefund use the same hot path and neither is wrapped'.",
+            "source": "slack",
+            "metadata": {
+              "channel": "DM",
+              "author": "oncall",
+              "ts": "2024-02-18T22:14:51Z",
+              "thread_id": "DM_oncall_eng_lead",
+              "_planted_for_demo": true
+            },
+            "score": 0.89
+          },
+          {
+            "id": "mem_reinforce_traceA_idempotency_cluster",
+            "text": "User triaged idempotency-key incident in webhooks/stripe.ts — reinforced this cluster. Reinforced memory_ids: [mem_slk_jan14_thread_001, mem_ntn_pm_2024_01_14, mem_ntn_adr_007]. Triage outcome: suspected_fix at webhooks/stripe.ts:84 (idempotency check missing on retry).",
+            "source": "slack",
+            "metadata": {
+              "kind": "triage_history",
+              "reinforces": [
+                "mem_slk_jan14_thread_001",
+                "mem_ntn_pm_2024_01_14",
+                "mem_ntn_adr_007"
+              ],
+              "triage_run_id": "tr_demo_trace_a",
+              "ts": "2024-05-09T03:47:30Z"
+            },
+            "score": 0.78
+          }
+        ]
+      },
+      "delay_ms": 400
+    },
+    {
+      "tool": "searchCode",
+      "input": {
+        "query": "processWebhook stripe.ts refund retry"
+      },
+      "output": {
+        "snippets": [
+          {
+            "file": "webhooks/stripe.ts",
+            "line": 91,
+            "content": "if (event.retry) {\n  // BUG: missing idempotency check on retry path (refund branch)\n  await processRefund(event);\n}",
+            "citation_url": "https://github.com/acme-billing/billing-service/blob/main/webhooks/stripe.ts#L91"
+          },
+          {
+            "file": "docs/ADR-007-idempotency-keys.md",
+            "line": 25,
+            "content": "Every Stripe webhook handler MUST consult a persistent idempotency check on event.id before performing any side effect, on every code path including retry paths.",
+            "citation_url": "https://github.com/acme-billing/billing-service/blob/main/docs/ADR-007-idempotency-keys.md#L25"
+          }
+        ],
+        "recent_commits": [
+          {
+            "sha": "a3f8e9c1b27c",
+            "author": "eng-lead",
+            "date": "2024-01-15T18:02:00Z",
+            "message": "fix(stripe): add retry handling to processWebhook (does NOT add idempotency check — see follow-up)"
+          }
+        ]
+      },
+      "delay_ms": 600
+    }
+  ],
+  "result": {
+    "timeline": [
+      { "at": "2024-05-09T03:48:34Z", "event": "Sentry alert fired: duplicate refund event for charge ch_def456 (event b9d2c4e0)" },
+      { "at": "2024-05-09T03:48:35Z", "event": "Stack frame: processWebhook (webhooks/stripe.ts:91)" },
+      { "at": "2024-05-09T03:47:30Z", "event": "Reinforced memory: agent triaged the same root-cause class 82s earlier (mem_reinforce_traceA_idempotency_cluster)" },
+      { "at": "2024-02-18T22:14:51Z", "event": "Reinforcement-surfaced DM: 'add a retry budget on idempotency keys' covers BOTH processCharge AND processRefund (mem_slk_dm_feb18_retry_budget)" },
+      { "at": "2024-01-14T03:51:08Z", "event": "Prior incident: Jan 14 #incidents thread (mem_slk_jan14_thread_001)" }
+    ],
+    "root_cause": {
+      "text": "Same idempotency-check gap as the prior charge-side incident, but on the refund branch at line 91. The Feb 18 DM explicitly warned this would bite both processCharge and processRefund — the retry-budget memory surfaced because Trace A's reinforcement step made it hot. Same fix shape, different surface.",
+      "citations": [
+        {
+          "source": "code",
+          "source_id": "webhooks/stripe.ts:91",
+          "excerpt": "if (event.retry) {\n  // BUG: missing idempotency check on retry path (refund branch)\n  await processRefund(event);\n}",
+          "verified": true
+        },
+        {
+          "source": "slack",
+          "source_id": "mem_slk_dm_feb18_retry_budget",
+          "excerpt": "we should add a retry budget on idempotency keys, this'll bite us again — both processCharge AND processRefund use the same hot path and neither is wrapped",
+          "metadata": {
+            "channel": "DM",
+            "author": "oncall",
+            "ts": "2024-02-18T22:14:51Z",
+            "_planted_for_demo": true
+          },
+          "verified": true
+        },
+        {
+          "source": "slack",
+          "source_id": "mem_reinforce_traceA_idempotency_cluster",
+          "excerpt": "User triaged idempotency-key incident in webhooks/stripe.ts — reinforced this cluster. Reinforced memory_ids: [mem_slk_jan14_thread_001, mem_ntn_pm_2024_01_14, mem_ntn_adr_007].",
+          "metadata": { "kind": "triage_history", "triage_run_id": "tr_demo_trace_a" },
+          "verified": true
+        },
+        {
+          "source": "notion",
+          "source_id": "mem_ntn_adr_007",
+          "excerpt": "ADR-007 — Idempotency keys for Stripe webhooks. lib/idempotency.ts.has() must be called before any side-effecting processCharge/processRefund.",
+          "metadata": { "doc_id": "adr_007_idempotency_keys" },
+          "verified": true
+        }
+      ]
+    },
+    "suspected_fix": {
+      "file": "webhooks/stripe.ts",
+      "line": 91,
+      "diff": "@@ webhooks/stripe.ts @@\n-if (event.retry) {\n-  // BUG: missing idempotency check on retry path (refund branch)\n-  await processRefund(event);\n-}\n+if (event.retry) {\n+  const key = `${event.id}:${event.type}`;\n+  if (await idempotencyStore.has(key)) return;\n+  await idempotencyStore.set(key);\n+  await processRefund(event);\n+}",
+      "citations": [
+        {
+          "source": "code",
+          "source_id": "lib/idempotency.ts:21",
+          "excerpt": "async has(key: string): Promise<boolean> { const { rows } = await db.query(\"select 1 from webhook_events where event_id = $1 limit 1\", [key]); return rows.length > 0; }",
+          "verified": true
+        },
+        {
+          "source": "code",
+          "source_id": "docs/ADR-007-idempotency-keys.md:25",
+          "excerpt": "Every Stripe webhook handler MUST consult a persistent idempotency check on event.id before performing any side effect, on every code path including retry paths.",
+          "verified": true
+        }
+      ]
+    },
+    "similar_incidents": [
+      {
+        "memory_id": "mem_slk_dm_feb18_retry_budget",
+        "summary": "Feb 18 DM — predicted exactly this regression; covers refund branch too. NEW citation surfaced via Trace A's reinforcement.",
+        "relevance": 0.96
+      },
+      {
+        "memory_id": "mem_reinforce_traceA_idempotency_cluster",
+        "summary": "Triage history — agent triaged the charge-side variant 82s earlier; same root-cause class.",
+        "relevance": 0.94
+      },
+      {
+        "memory_id": "mem_slk_jan14_thread_001",
+        "summary": "Jan 14 — duplicate charge events in #incidents thread.",
+        "relevance": 0.93
+      },
+      {
+        "memory_id": "mem_ntn_pm_2024_01_14",
+        "summary": "Jan 14 postmortem — Stripe webhook regression; idempotency gap.",
+        "relevance": 0.92
+      },
+      {
+        "memory_id": "mem_ntn_adr_007",
+        "summary": "ADR-007 — governs idempotency-key format; not enforced.",
+        "relevance": 0.84
+      }
+    ]
+  }
+}

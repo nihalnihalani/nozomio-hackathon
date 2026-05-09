@@ -1,0 +1,30 @@
+{
+  "_query": "idempotency keys retry budget",
+  "_note": "Direct hit on the retry-budget DM. Used by tests/invariants/reinforcement.test.ts to confirm the DM is reachable as a memory.",
+  "memories": [
+    {
+      "id": "mem_slk_dm_feb18_retry_budget",
+      "text": "DM oncall→eng-lead, Feb 18: 'we should add a retry budget on idempotency keys, this'll bite us again — both processCharge AND processRefund use the same hot path and neither is wrapped'.",
+      "source": "slack",
+      "metadata": {
+        "channel": "DM",
+        "author": "oncall",
+        "ts": "2024-02-18T22:14:51Z",
+        "thread_id": "DM_oncall_eng_lead",
+        "_planted_for_demo": true
+      },
+      "score": 0.97
+    },
+    {
+      "id": "mem_ntn_adr_007",
+      "text": "ADR-007 — Idempotency keys for Stripe webhooks. We standardize on `${event.id}:${event.type}` as the key; lib/idempotency.ts.has() must be called before any side-effecting processCharge/processRefund.",
+      "source": "notion",
+      "metadata": {
+        "doc_id": "adr_007_idempotency_keys",
+        "author": "eng-lead",
+        "ts": "2024-01-22T10:04:00Z"
+      },
+      "score": 0.71
+    }
+  ]
+}

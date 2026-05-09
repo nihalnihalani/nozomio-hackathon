@@ -1,0 +1,20 @@
+{
+  "_query": "billing service database connection",
+  "_note": "Control fixture — unrelated to the demo path. Returns a connection-pool helper, not the webhook bug.",
+  "snippets": [
+    {
+      "file": "lib/db.ts",
+      "line": 24,
+      "content": "export async function getConnection(): Promise<PoolClient> {\n  return pool.connect();\n}",
+      "citation_url": "https://github.com/acme-billing/billing-service/blob/main/lib/db.ts#L24"
+    }
+  ],
+  "recent_commits": [
+    {
+      "sha": "f10c7eaae812",
+      "author": "eng-lead",
+      "date": "2024-03-08T09:14:00Z",
+      "message": "perf(db): bump pool size to 50 after 2024-03-07 latency incident"
+    }
+  ]
+}

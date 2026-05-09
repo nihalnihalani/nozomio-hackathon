@@ -1,0 +1,8 @@
+{
+  "_doc": "Map of Nia query hash -> fixture file. Hash is sha1(`${mode}:${query}`).slice(0,16) — see ./README.md.",
+  "queries": {
+    "processWebhook stripe.ts retry idempotency": "33fb18b841fa1b6b.json",
+    "processWebhook stripe.ts refund retry": "a08b869370c6cac0.json",
+    "billing service database connection": "9c1aa0ed4cbf383d.json"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "@acme/billing-service",
+  "version": "1.42.3",
+  "private": true,
+  "description": "SYNTHETIC DEMO REPO — fictional Acme Billing payments service. Used by Triage to demonstrate code-aware incident triage. Not for production.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.13.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/app.js",
+    "dev": "tsx watch app.ts",
+    "test": "vitest run",
+    "lint": "eslint . --ext .ts"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.11.5",
+    "pino": "^9.0.0",
+    "stripe": "^14.25.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.7",
+    "@types/pg": "^8.11.5",
+    "tsx": "^4.7.2",
+    "typescript": "^5.4.5",
+    "vitest": "^1.5.3",
+    "eslint": "^9.0.0"
+  }
+}

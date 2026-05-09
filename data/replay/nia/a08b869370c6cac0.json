@@ -1,0 +1,26 @@
+{
+  "_query": "processWebhook stripe.ts refund retry",
+  "_note": "Trace B code search. The bug surfaces at line 91 (refund branch) but is the SAME class as Trace A's line 84 — that's why reinforcement helps.",
+  "snippets": [
+    {
+      "file": "webhooks/stripe.ts",
+      "line": 91,
+      "content": "if (event.retry) {\n  // BUG: missing idempotency check on retry path (refund branch)\n  await processRefund(event);\n}",
+      "citation_url": "https://github.com/acme-billing/billing-service/blob/main/webhooks/stripe.ts#L91"
+    },
+    {
+      "file": "docs/ADR-007-idempotency-keys.md",
+      "line": 25,
+      "content": "Every Stripe webhook handler MUST consult a persistent idempotency check on event.id before performing any side effect, on every code path including retry paths.",
+      "citation_url": "https://github.com/acme-billing/billing-service/blob/main/docs/ADR-007-idempotency-keys.md#L25"
+    }
+  ],
+  "recent_commits": [
+    {
+      "sha": "a3f8e9c1b27c",
+      "author": "eng-lead",
+      "date": "2024-01-15T18:02:00Z",
+      "message": "fix(stripe): add retry handling to processWebhook (does NOT add idempotency check — see follow-up)"
+    }
+  ]
+}

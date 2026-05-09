@@ -1,0 +1,250 @@
+{
+  "_comment": "Synthetic data. Fictional company 'Acme Billing'. No real PII. 30 messages spanning 2024-01-14 to 2024-05-09. The DM at slack_007 is the planted key memory for the Trace B reinforcement beat.",
+  "messages": [
+    {
+      "id": "slack_001",
+      "ts": "2024-01-14T22:11:03Z",
+      "channel": "#incidents",
+      "author": "alex@acme.io",
+      "thread_id": "thread_jan14_stripe",
+      "text": "Stripe webhook flaking — seeing duplicate `charge.succeeded` events processed twice. Sentry firing on /webhooks/stripe. Investigating."
+    },
+    {
+      "id": "slack_002",
+      "ts": "2024-01-14T22:14:48Z",
+      "channel": "#incidents",
+      "author": "priya@acme.io",
+      "thread_id": "thread_jan14_stripe",
+      "text": "On it with Alex. Looks like Stripe is retrying webhooks aggressively after a 5xx blip, and our handler isn't deduping on event.id. Eng Lead deploying fix tonight."
+    },
+    {
+      "id": "slack_003",
+      "ts": "2024-01-14T23:02:17Z",
+      "channel": "#incidents",
+      "author": "alex@acme.io",
+      "thread_id": "thread_jan14_stripe",
+      "text": "Confirmed root cause — `webhooks/stripe.ts` was double-processing on retries. Patching now. ~12 customers double-charged so far, refunds queued."
+    },
+    {
+      "id": "slack_004",
+      "ts": "2024-01-15T00:48:32Z",
+      "channel": "#incidents",
+      "author": "priya@acme.io",
+      "thread_id": "thread_jan14_stripe",
+      "text": "Fix shipped — added retry handling to webhooks/stripe.ts. Stripe events flowing clean for 20 min straight. Postmortem tomorrow. Refunds processed for all 14 affected customers."
+    },
+    {
+      "id": "slack_005",
+      "ts": "2024-01-15T01:02:09Z",
+      "channel": "#incidents",
+      "author": "alex@acme.io",
+      "thread_id": "thread_jan14_stripe",
+      "text": "Resolved. Marking incident closed. Will write up the postmortem in Notion tomorrow morning."
+    },
+
+    {
+      "id": "slack_006",
+      "ts": "2024-02-18T15:23:41Z",
+      "channel": "DM:oncall-eng-lead",
+      "author": "alex@acme.io",
+      "thread_id": "thread_dm_alex_priya",
+      "text": "Hey, been thinking about the Jan 14 Stripe thing. The fix we shipped only handles the simple retry case — we still don't have a cap on how many times a single event.id can be replayed."
+    },
+    {
+      "id": "slack_007",
+      "ts": "2024-02-18T15:26:14Z",
+      "channel": "DM:oncall-eng-lead",
+      "author": "alex@acme.io",
+      "thread_id": "thread_dm_alex_priya",
+      "text": "we should add a retry budget on idempotency keys, this'll bite us again"
+    },
+    {
+      "id": "slack_008",
+      "ts": "2024-02-18T15:34:02Z",
+      "channel": "DM:oncall-eng-lead",
+      "author": "priya@acme.io",
+      "thread_id": "thread_dm_alex_priya",
+      "text": "Agreed. I'll cut a WIP branch tonight and we can review tomorrow. Worst case is Stripe retries something 50 times after a network blip and we charge once per retry."
+    },
+
+    {
+      "id": "slack_009",
+      "ts": "2024-03-07T09:14:55Z",
+      "channel": "#incidents",
+      "author": "ben@acme.io",
+      "thread_id": "thread_mar7_latency",
+      "text": "Billing service p95 latency is at 2.3s, alarms firing. Doesn't look Stripe-related — DB connection pool is saturated."
+    },
+    {
+      "id": "slack_010",
+      "ts": "2024-03-07T09:31:18Z",
+      "channel": "#incidents",
+      "author": "sara@acme.io",
+      "thread_id": "thread_mar7_latency",
+      "text": "Confirmed it's the shared RDS box — noisy neighbor on the analytics workload. Failing over to read replica for now."
+    },
+    {
+      "id": "slack_011",
+      "ts": "2024-03-07T11:48:07Z",
+      "channel": "#incidents",
+      "author": "ben@acme.io",
+      "thread_id": "thread_mar7_latency",
+      "text": "Latency back to baseline. Long-term fix is splitting the analytics DB. Filing a ticket. Closing this incident."
+    },
+
+    {
+      "id": "slack_012",
+      "ts": "2024-04-10T16:02:33Z",
+      "channel": "#eng",
+      "author": "priya@acme.io",
+      "thread_id": "thread_apr10_designreview",
+      "text": "Design review at 4: Stripe webhook hardening. Proposing we standardize on the `X-Idempotency-Key` header for every webhook handler we own, not just Stripe. Doc in Notion."
+    },
+    {
+      "id": "slack_013",
+      "ts": "2024-04-10T16:48:21Z",
+      "channel": "#eng",
+      "author": "ben@acme.io",
+      "thread_id": "thread_apr10_designreview",
+      "text": "+1. The Stripe SDK gives us `event.id` for free, we just need to pipe it into the same idempotency table the API uses for client requests."
+    },
+    {
+      "id": "slack_014",
+      "ts": "2024-04-10T17:11:09Z",
+      "channel": "#eng",
+      "author": "sara@acme.io",
+      "thread_id": "thread_apr10_designreview",
+      "text": "Decision: X-Idempotency-Key header for Stripe webhooks, ADR-007 to be written. Owner: Ben. Target: end of next sprint."
+    },
+    {
+      "id": "slack_015",
+      "ts": "2024-04-10T17:14:44Z",
+      "channel": "#eng",
+      "author": "priya@acme.io",
+      "thread_id": "thread_apr10_designreview",
+      "text": "Great — I'll review the ADR draft Friday. Don't forget to wire it through the retry path too, not just the first-attempt path."
+    },
+
+    {
+      "id": "slack_016",
+      "ts": "2024-04-15T10:22:18Z",
+      "channel": "#eng",
+      "author": "ben@acme.io",
+      "thread_id": null,
+      "text": "Pushed ADR-007 to docs/ — feedback welcome by Wed. Mostly codifies what we discussed Thursday."
+    },
+    {
+      "id": "slack_017",
+      "ts": "2024-04-16T14:08:52Z",
+      "channel": "#eng",
+      "author": "sara@acme.io",
+      "thread_id": null,
+      "text": "Welcome @jordan! New backend engineer joining the billing pod. First-week setup doc is in Notion."
+    },
+    {
+      "id": "slack_018",
+      "ts": "2024-04-17T09:45:11Z",
+      "channel": "#eng",
+      "author": "priya@acme.io",
+      "thread_id": null,
+      "text": "Reminder: code freeze tomorrow 5pm for the v1.42 release. Get your PRs in."
+    },
+    {
+      "id": "slack_019",
+      "ts": "2024-04-18T11:30:47Z",
+      "channel": "#eng",
+      "author": "alex@acme.io",
+      "thread_id": null,
+      "text": "Anyone want to grab lunch at the new ramen place at 12:30? My treat if we ship v1.42 clean."
+    },
+    {
+      "id": "slack_020",
+      "ts": "2024-04-19T16:14:28Z",
+      "channel": "#eng",
+      "author": "ben@acme.io",
+      "thread_id": null,
+      "text": "v1.42 deployed to prod. Smoke tests green. Can someone review #PR-1183 (refund flow refactor)? Small but I'd like a second pair of eyes."
+    },
+    {
+      "id": "slack_021",
+      "ts": "2024-04-22T10:01:55Z",
+      "channel": "#eng",
+      "author": "sara@acme.io",
+      "thread_id": null,
+      "text": "Reviewed #PR-1183, left two comments. Mainly the error-mapping in `routes/refunds.ts` — let's not swallow the underlying Stripe error code."
+    },
+    {
+      "id": "slack_022",
+      "ts": "2024-04-23T13:42:09Z",
+      "channel": "#eng",
+      "author": "priya@acme.io",
+      "thread_id": null,
+      "text": "Quarterly planning offsite is May 22-23 in Tahoe. Calendar invites going out today. Travel reimbursement form is in the wiki."
+    },
+    {
+      "id": "slack_023",
+      "ts": "2024-04-25T09:18:33Z",
+      "channel": "#eng",
+      "author": "alex@acme.io",
+      "thread_id": null,
+      "text": "Datadog dashboards finally migrated off the legacy v1 API. All billing-service alerts now route through the new pipeline."
+    },
+    {
+      "id": "slack_024",
+      "ts": "2024-04-29T15:55:40Z",
+      "channel": "#eng",
+      "author": "ben@acme.io",
+      "thread_id": null,
+      "text": "Heads up — bumping Node from 20.11 to 20.13 across services next week. Mostly a security patch but worth a heads-up. Will run the canary first."
+    },
+    {
+      "id": "slack_025",
+      "ts": "2024-05-01T11:24:02Z",
+      "channel": "#eng",
+      "author": "sara@acme.io",
+      "thread_id": null,
+      "text": "ICYMI: postmortem for the Apr 28 Redis hiccup is up in Notion. TL;DR: connection pool exhaustion on the rate-limiter. Mitigated, no customer impact."
+    },
+    {
+      "id": "slack_026",
+      "ts": "2024-05-03T14:38:17Z",
+      "channel": "#eng",
+      "author": "priya@acme.io",
+      "thread_id": null,
+      "text": "Coffee chat at 3 with the new platform team — we're consolidating the deploy pipelines. Async notes will be in the platform channel."
+    },
+    {
+      "id": "slack_027",
+      "ts": "2024-05-06T10:12:51Z",
+      "channel": "#eng",
+      "author": "alex@acme.io",
+      "thread_id": null,
+      "text": "Anyone seeing slow CI on the billing-service repo this morning? My PR took 14 min to run. Probably Github Actions, not us, but logging it here."
+    },
+    {
+      "id": "slack_028",
+      "ts": "2024-05-08T16:47:29Z",
+      "channel": "#eng",
+      "author": "ben@acme.io",
+      "thread_id": null,
+      "text": "X-Idempotency-Key header support is in main as of #PR-1207 — partial implementation. First-attempt path only for now; retry path TODO. Will tackle next sprint."
+    },
+
+    {
+      "id": "slack_029",
+      "ts": "2024-05-09T03:48:11Z",
+      "channel": "#incidents",
+      "author": "alex@acme.io",
+      "thread_id": "thread_may9_dupe",
+      "text": "duplicate charges showing in Stripe — alarm fired at 03:47. Sentry event a3f8e9c1. This looks like the Jan 14 thing all over again."
+    },
+    {
+      "id": "slack_030",
+      "ts": "2024-05-09T03:49:02Z",
+      "channel": "#incidents",
+      "author": "priya@acme.io",
+      "thread_id": "thread_may9_dupe",
+      "text": "ack, looking now"
+    }
+  ]
+}
