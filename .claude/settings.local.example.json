@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy this to .claude/settings.local.json (gitignored) and fill in your Hyperspell credentials. Restart Claude Code to load the MCP server. Tools are restricted to read-only (search/get_memory/user_info) — writes to Hyperspell must go through convex/reinforce.ts per Invariant 2 in lib/hyperspell/client.ts. Version is pinned; bump deliberately.",
+  "mcpServers": {
+    "hyperspell": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@hyperspell/hyperspell-mcp@0.38.0",
+        "--client=claude-code",
+        "--tools=search,get_memory,user_info"
+      ],
+      "env": {
+        "HYPERSPELL_API_KEY": "your-hyperspell-api-key",
+        "HYPERSPELL_USER_ID": "your-hyperspell-user-id"
+      }
+    }
+  }
+}
