@@ -11,18 +11,24 @@ import { api } from "@/convex/_generated/api";
  * watch the row land in this panel within ~150ms with no page reload.
  *
  * Renders nothing if NEXT_PUBLIC_CONVEX_URL is unset (replay-only deploys).
+ *
+ * Split into outer (env-gate) + inner (useQuery) because in CI the build
+ * runs without NEXT_PUBLIC_CONVEX_URL set; `app/providers.tsx` then
+ * renders no ConvexProvider, and any `useQuery` call in a child crashes
+ * SSR prerender with "Could not find Convex client". Mounting the inner
+ * conditionally keeps useQuery off the call stack when there's no
+ * provider in the tree.
  */
 export function ConvexLiveActivity({ orgId = "demo-org" }: { orgId?: string }) {
-  const enabled = Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
-  // useQuery still must be called unconditionally to satisfy hook rules,
-  // but the no-op ConvexProvider in app/providers.tsx makes the hook
-  // return undefined when disabled — handled below.
-  const runs = useQuery(
-    api.triage.recentRuns,
-    enabled ? { orgId, limit: 5 } : "skip"
-  );
+  // process.env.NEXT_PUBLIC_* is inlined at BUILD time by Next.js, so this
+  // check resolves to a constant per build target — no runtime hooks
+  // ordering concern.
+  if (!process.env.NEXT_PUBLIC_CONVEX_URL) return null;
+  return <ConvexLiveActivityInner orgId={orgId} />;
+}
 
-  if (!enabled) return null;
+function ConvexLiveActivityInner({ orgId }: { orgId: string }) {
+  const runs = useQuery(api.triage.recentRuns, { orgId, limit: 5 });
 
   return (
     <section className="border-t border-border pt-4">

@@ -97,7 +97,10 @@
 
 ```
 Frontend:        Next.js 15 (App Router) · TypeScript · shadcn/ui · Tailwind
-LLM:             OpenAI gpt-5.5 (reasoning model; see .env OPENAI_MODEL / OPENAI_REASONING_EFFORT)
+LLM:             N/A in DEMO_MODE=replay (default — fixtures only, no LLM call).
+                 Live-mode code currently imports @ai-sdk/anthropic (claude-
+                 sonnet-4-5); the .env has OPENAI_API_KEY but no Anthropic
+                 key, so live mode is intentionally not enabled for the demo.
 Agent runtime:   @convex-dev/agent + Vercel AI SDK 6
 Backend (hot):   Convex (queries, mutations, actions, scheduled functions)
 Backend (cold):  InsForge (Postgres + auth + RLS + edge functions)
