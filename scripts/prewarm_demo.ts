@@ -85,7 +85,7 @@ async function pingLive(): Promise<{ hyperspell: boolean; nia: boolean }> {
   if (hsKey) {
     try {
       const res = await fetch(
-        `${process.env.HYPERSPELL_API_BASE ?? "https://api.hyperspell.com"}/v1/healthz`,
+        `${process.env.HYPERSPELL_API_BASE ?? "https://api.hyperspell.com"}/healthz`,
         { headers: { authorization: `Bearer ${hsKey}` } }
       );
       hyperspell = res.ok;

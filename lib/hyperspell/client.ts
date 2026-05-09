@@ -34,6 +34,13 @@ export interface AddMemoryInput {
 }
 
 export interface SearchOptions {
+  /**
+   * Per-source weighting hint. **Replay-mode only** post-2026-05-09 fix: the
+   * live Hyperspell `/memories/query` endpoint does not accept a
+   * `source_weights` parameter, so this value is silently ignored on the
+   * wire. It is still mixed into `hashKey()` for replay-fixture lookup
+   * determinism, so callers may pass it without breaking replay.
+   */
   source_weights?: Partial<Record<SourceType | "triage_history", number>>;
   limit?: number;
 }
@@ -190,9 +197,27 @@ async function liveSearch(input: SearchInput): Promise<SearchResult> {
     throw new Error(`hyperspell query ${res.status}: ${await res.text()}`);
   }
   const json = (await res.json()) as LiveSearchResponseRaw;
+  // Surface partial-failure errors from the API. Hyperspell can return a
+  // 200 response with `errors: [{error, message}]` (e.g., NoResultsForSource
+  // when querying an unconnected provider). We log so the demo team can
+  // debug "why are documents empty" without rerunning under DEBUG=*.
+  if (Array.isArray(json.errors) && json.errors.length > 0) {
+    console.warn("[hyperspell] query returned partial errors:", json.errors);
+  }
   const memories: Memory[] = (json.documents ?? []).flatMap((d) => {
     const id = d.resource_id;
-    const source = d.source as SourceType | undefined;
+    // Round-trip safety: `liveAdd` writes our logical source (slack/notion/
+    // gmail/triage_history) into `metadata.source` because the public API has
+    // no top-level `source` parameter on add. The query endpoint returns a
+    // top-level `source` (Hyperspell's connector identity, e.g. "vault" for
+    // direct adds, "slack" for OAuth-connected Slack). Prefer metadata.source
+    // when present so memories ingested via this client come back classified
+    // the way the agent expects; fall back to top-level for connector data.
+    const metaSource =
+      typeof d.metadata?.source === "string"
+        ? (d.metadata.source as SourceType)
+        : undefined;
+    const source = metaSource ?? (d.source as SourceType | undefined);
     // The query endpoint does not return text; surface `title` as the
     // excerpt fallback. If neither is present, drop the result rather
     // than fabricate (Invariant 1 — Cite-or-Die).
