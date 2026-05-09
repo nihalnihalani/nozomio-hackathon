@@ -22,6 +22,7 @@ const SOURCE_LABEL: Record<SourceType, string> = {
   slack: "Slack",
   notion: "Notion",
   gmail: "Gmail",
+  google_drive: "Google Drive",
   code: "Code",
 };
 
@@ -33,6 +34,8 @@ function SourceIcon({ source, className }: { source: SourceType; className?: str
       return <FileText className={className} />;
     case "gmail":
       return <Mail className={className} />;
+    case "google_drive":
+      return <FileText className={className} />;
     case "code":
       return <Code2 className={className} />;
   }
@@ -55,6 +58,7 @@ export function CitationDrawer({ citation, open, onOpenChange }: CitationDrawerP
                     citation.source === "slack" && "bg-blue-500/15 text-blue-300",
                     citation.source === "notion" && "bg-zinc-500/20 text-zinc-300",
                     citation.source === "gmail" && "bg-red-500/15 text-red-300",
+                    citation.source === "google_drive" && "bg-emerald-500/15 text-emerald-300",
                     citation.source === "code" && "bg-green-500/15 text-green-300"
                   )}
                 >

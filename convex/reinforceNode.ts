@@ -42,7 +42,8 @@ export const reinforce = action({
             (c: { source: string; sourceId: string }) =>
               c.source === "slack" ||
               c.source === "notion" ||
-              c.source === "gmail"
+              c.source === "gmail" ||
+              c.source === "google_drive"
           )
           .map((c: { sourceId: string }) => c.sourceId)
       )
