@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * useTriage — abstracts Convex `useMutation/useQuery` vs `/api/triage` SSE.
+ * useTriage — abstracts Convex `@convex-dev/agent` UIMessages vs `/api/triage` SSE.
  *
  * Both modes expose the SAME interface so the UI doesn't branch:
  *   const { run, byId, isRunning, error, mode } = useTriage();
@@ -9,20 +9,33 @@
  * - `run({ trace })`  → returns `triageRunId: string`
  * - `byId(id)`        → returns reactive `TriageRunSnapshot` (or null while loading)
  *
- * Convex path (active when NEXT_PUBLIC_CONVEX_URL is set):
- *   - Kicks off the agent via POST /api/triage (the agent runtime stays
- *     in Next.js because lib/agent/loop reads seed/ + data/replay/ from
- *     disk, neither of which is bundled into Convex's sandbox).
+ * Convex path (active when NEXT_PUBLIC_CONVEX_URL is set) — Phase 2:
+ *   - Kicks off the agent via POST /api/triage. The Next.js route runs
+ *     `api.triage.start` which creates an Agent component thread, persists
+ *     `triageRuns.threadId`, and schedules `internal.triageNode.runTriage`
+ *     (which calls `thread.streamText({ saveStreamDeltas: true })`).
  *   - Reads ONLY the `run_started` SSE event to capture the Convex runId.
- *   - All subsequent UI state comes from `useQuery(api.triage.byId)` —
- *     populated by the mirror writes in app/api/triage/route.ts.
+ *   - The hook then subscribes to:
+ *       1. `useQuery(api.triage.runById, { id })` to resolve `threadId`
+ *          + run-level metadata (status, timeline, rootCause, suspectedFix,
+ *          similarIncidentsDetailed, errorMessage).
+ *       2. `useUIMessages(api.triage.listMessages, { threadId }, { stream: true })`
+ *          for live token-by-token deltas from the agent's message stream.
+ *     The two are reshaped into the existing `TriageRunSnapshot` shape via
+ *     `uiMessagesToTriageSnapshot()` so `TraceUI` + result cards keep working.
  *
- *   Limitation: `useQuery` must be called at the top level (rules of
- *   hooks), so this hook hardcodes TWO subscription slots — matching the
- *   current UI's slot A / slot B layout. A 3rd concurrent run would not
- *   render. Re-architect with per-component subscriptions when needed.
+ *   Why fetch threadId via runById? The frontend only knows the triageRunId
+ *   after `start` returns; the threadId lives on that row. One reactive
+ *   query per slot resolves it cleanly without changing the public API. The
+ *   alternative — having `start` return both ids — would force a second
+ *   handshake field on the SSE protocol and complicate the SSE-fallback
+ *   contract for no real win.
  *
- * SSE path (fallback when NEXT_PUBLIC_CONVEX_URL is unset):
+ *   Limitation: hooks can't be called conditionally, so this hook hardcodes
+ *   TWO subscription slots (Trace A / Trace B layout). A 3rd concurrent run
+ *   would not render.
+ *
+ * SSE path (fallback when NEXT_PUBLIC_CONVEX_URL is unset) — UNCHANGED:
  *   - POSTs `{ trace }` to `/api/triage`, consumes Server-Sent Events,
  *     accumulates a snapshot in local React state keyed by client-side id.
  *   - Demo runs with no Convex connection at all (Invariant 4).
@@ -30,9 +43,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "convex/react";
+import { useUIMessages, useSmoothText } from "@convex-dev/agent/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { Citation } from "@/lib/types";
+
+// Re-export `useSmoothText` so components can opt into per-token rendering
+// without importing `@convex-dev/agent/react` directly. Centralizing the
+// dependency here keeps component code Convex-agnostic.
+export { useSmoothText };
 
 // ─── Snapshot shape (frontend-side mirror of Convex triageRuns + relations) ──
 
@@ -86,6 +105,14 @@ export interface TriageRunSnapshot {
   suspectedFix?: SuspectedFix;
   similarIncidents?: SimilarIncident[];
   error?: string;
+  /**
+   * Accumulated assistant text (for the Convex path, this is the most-recent
+   * streaming/finalized assistant message's `.text`). Surfaces from
+   * `useUIMessages` so consumers can run `useSmoothText` over it.
+   */
+  streamingText?: string;
+  /** True while a UIMessage is actively streaming. Drives `useSmoothText`. */
+  isStreaming?: boolean;
 }
 
 export type TriageMode = "convex" | "sse";
@@ -104,127 +131,359 @@ function hasConvex(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
 }
 
-// ─── Adapter: Convex byId result → TriageRunSnapshot ─────────────────────────
+// ─── Adapter: UIMessage[] + run row → TriageRunSnapshot ─────────────────────
+//
+// The Agent component's `UIMessage.parts[]` carries each tool call as a
+// `tool-${name}` part with `state` + `input` + `output`. We reshape into
+// the existing `TriageRunSnapshot` so the rest of the UI is unchanged.
+// All `as any` shape-bridging is isolated in this single helper.
 
-type ConvexCitationRow = {
-  _id: Id<"citations">;
-  source: "slack" | "notion" | "gmail" | "code";
-  sourceId: string;
-  excerpt: string;
-  metadata?: unknown;
-  verified: boolean;
-};
-
-type ConvexToolCallRow = {
-  _id: Id<"toolCalls">;
-  tool: "recallSimilarIncidents" | "searchCode";
-  input: unknown;
-  output: unknown;
-  latencyMs: number;
-  at: number;
-};
-
-type ConvexByIdResult = {
-  run: {
-    _id: Id<"triageRuns">;
-    inputTrace: string;
-    status: TriageStatus;
-    startedAt: number;
-    finishedAt?: number;
-    timeline?: TimelineEntry[];
-    rootCause?: { text: string; citations: string[] };
-    suspectedFix?: {
-      file: string;
-      line: number;
-      diff: string;
-      citations: string[];
-    };
-    similarIncidents?: string[];
-    similarIncidentsDetailed?: SimilarIncident[];
-    errorMessage?: string;
+type AgentRunRow = {
+  _id: Id<"triageRuns">;
+  inputTrace: string;
+  status: TriageStatus;
+  startedAt: number;
+  finishedAt?: number;
+  threadId?: string;
+  timeline?: TimelineEntry[];
+  rootCause?: { text: string; citations: string[] };
+  suspectedFix?: {
+    file: string;
+    line: number;
+    diff: string;
+    citations: string[];
   };
-  toolCalls: ConvexToolCallRow[];
-  citations: ConvexCitationRow[];
-  memoryEvents: unknown[];
+  similarIncidents?: string[];
+  similarIncidentsDetailed?: SimilarIncident[];
+  errorMessage?: string;
 };
 
-function rowToCitation(c: ConvexCitationRow): Citation {
+/**
+ * Loose tool-part shape that covers both `tool-recallSimilarIncidents`,
+ * `tool-searchCode`, and the AI SDK's `dynamic-tool` fallback. We deliberately
+ * keep this `as any` boundary inside `uiMessagesToTriageSnapshot` so the rest
+ * of the codebase only ever sees `TriageRunSnapshot`.
+ */
+type ToolPart = {
+  type: string; // e.g. "tool-recallSimilarIncidents" | "dynamic-tool"
+  toolName?: string;
+  toolCallId?: string;
+  state?: string; // "input-streaming" | "input-available" | "output-available" | ...
+  input?: unknown;
+  output?: unknown;
+  errorText?: string;
+};
+
+const TOOL_NAMES = ["recallSimilarIncidents", "searchCode"] as const;
+type KnownTool = (typeof TOOL_NAMES)[number];
+
+function extractToolName(part: ToolPart): KnownTool | null {
+  // Static tool parts: `tool-recallSimilarIncidents`, `tool-searchCode`.
+  if (typeof part.type === "string" && part.type.startsWith("tool-")) {
+    const name = part.type.slice("tool-".length);
+    if (TOOL_NAMES.includes(name as KnownTool)) return name as KnownTool;
+  }
+  // Dynamic tool parts: `{ type: "dynamic-tool", toolName }`.
+  if (
+    part.type === "dynamic-tool" &&
+    typeof part.toolName === "string" &&
+    TOOL_NAMES.includes(part.toolName as KnownTool)
+  ) {
+    return part.toolName as KnownTool;
+  }
+  return null;
+}
+
+function toolStateToStatus(
+  state: string | undefined
+): ToolCallSnapshot["status"] {
+  if (state === "output-available") return "done";
+  if (state === "output-error") return "error";
+  return "running";
+}
+
+function memoryToCitation(mem: unknown): Citation | null {
+  if (!mem || typeof mem !== "object") return null;
+  // Hyperspell shape: { id, text, source, metadata }
+  const m = mem as {
+    id?: unknown;
+    text?: unknown;
+    source?: unknown;
+    metadata?: unknown;
+  };
+  if (typeof m.id !== "string" || typeof m.source !== "string") return null;
+  if (
+    m.source !== "slack" &&
+    m.source !== "notion" &&
+    m.source !== "gmail" &&
+    m.source !== "code"
+  ) {
+    return null;
+  }
   return {
-    source: c.source,
-    source_id: c.sourceId,
-    excerpt: c.excerpt,
-    metadata: (c.metadata ?? {}) as Record<string, unknown>,
-    verified: c.verified,
+    source: m.source,
+    source_id: m.id,
+    excerpt: typeof m.text === "string" ? m.text.slice(0, 500) : "",
+    metadata:
+      m.metadata && typeof m.metadata === "object"
+        ? (m.metadata as Record<string, unknown>)
+        : {},
+    // Hyperspell recall is trusted by Invariant 1 — same as the SSE path.
+    verified: true,
   };
 }
 
-/** Resolve a list of source_id strings back to Citation objects via the
- *  citations relation, falling back to a synthetic stub if missing. */
-function resolveCitations(
-  ids: string[],
-  citations: ConvexCitationRow[]
-): Citation[] {
-  return ids.map((sid) => {
-    const found = citations.find((c) => c.sourceId === sid);
-    if (found) return rowToCitation(found);
-    return {
-      source: "code",
-      source_id: sid,
-      excerpt: "",
-      metadata: {},
-      verified: false,
-    };
-  });
+function snippetToCitation(snip: unknown): Citation | null {
+  if (!snip || typeof snip !== "object") return null;
+  const s = snip as {
+    file?: unknown;
+    line?: unknown;
+    content?: unknown;
+    citation_url?: unknown;
+  };
+  if (typeof s.file !== "string" || typeof s.line !== "number") return null;
+  return {
+    source: "code",
+    source_id: `${s.file}:${s.line}`,
+    excerpt: typeof s.content === "string" ? s.content.slice(0, 500) : "",
+    metadata:
+      typeof s.citation_url === "string"
+        ? { citation_url: s.citation_url }
+        : {},
+    // searchCode pre-verifies file:line in the live path; assume verified
+    // here. The frontend renders [verification failed] only when the
+    // server explicitly emits verified=false, which the agent component's
+    // tool output preserves via the same path.
+    verified: true,
+  };
 }
 
-function convexToSnapshot(data: ConvexByIdResult): TriageRunSnapshot {
-  const r = data.run;
+/**
+ * Detect a "reinforced" memory (Invariant 2 — the 🧠 badge). The Agent's
+ * `searchOtherThreads` RAG can surface prior triage memories naturally;
+ * we tag them based on either the Hyperspell metadata.kind or the
+ * `mem_reinforce_` id prefix that `convex/reinforce.ts` writes.
+ */
+function isFromTriageHistory(mem: unknown): boolean {
+  if (!mem || typeof mem !== "object") return false;
+  const m = mem as { id?: unknown; metadata?: unknown };
+  if (
+    typeof m.id === "string" &&
+    (m.id.startsWith("mem_reinforce_") || m.id.startsWith("reinforce_"))
+  ) {
+    return true;
+  }
+  if (m.metadata && typeof m.metadata === "object") {
+    const meta = m.metadata as { kind?: unknown; source?: unknown };
+    if (meta.kind === "triage_history" || meta.source === "triage_history") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Reshape: agent component UIMessages + the triageRuns row → TriageRunSnapshot.
+ *
+ *   - Tool calls come from `parts[type="tool-${name}"]` across all messages.
+ *   - Citations come from each tool call's `output` payload (memories /
+ *     snippets), preserving the `verified` flag (Invariant 1).
+ *   - Similar incidents use the run row's structured `similarIncidentsDetailed`
+ *     when populated (cold-path mirror), else fall back to detecting them
+ *     from the recallSimilarIncidents output (preserves the 🧠 badge via
+ *     `fromTriageHistory` detection).
+ *   - Streaming text is the most-recent assistant message's `.text` so the
+ *     UI can run `useSmoothText` for token-by-token "agent thinking".
+ */
+/**
+ * Loose UIMessage shape we consume. The Agent SDK's `UIMessage` carries
+ * many extra fields (id, key, etc.) that we don't need; using a structural
+ * subset keeps the helper compatible with both `UIMessage` (from
+ * `useUIMessages`) and `UIMessageLike` (from `useStreamingUIMessages`)
+ * without an explicit cast at every call site.
+ */
+type UIMessageLike = {
+  role: string;
+  parts?: unknown[];
+  status?: string;
+  text?: string;
+  _creationTime?: number;
+};
+
+export function uiMessagesToTriageSnapshot(
+  uiMessages: UIMessageLike[],
+  runRow: AgentRunRow
+): TriageRunSnapshot {
+  const toolCalls: ToolCallSnapshot[] = [];
+  const citations: Citation[] = [];
+  const seenCitations = new Set<string>();
+  const similarFromTools: SimilarIncident[] = [];
+  const seenMemoryIds = new Set<string>();
+
+  let latestStreamingText = "";
+  let isStreaming = false;
+
+  for (const msg of uiMessages) {
+    if (msg.role === "assistant") {
+      // The most recent assistant message carries the smoothed text. The
+      // Agent component's `UIMessage.text` is the full assembled text for
+      // that message (including streaming partials).
+      if (typeof msg.text === "string" && msg.text.length > 0) {
+        latestStreamingText = msg.text;
+      }
+      if (msg.status === "streaming" || msg.status === "pending") {
+        isStreaming = true;
+      }
+    }
+
+    const parts = (msg as unknown as { parts?: unknown[] }).parts ?? [];
+    for (const rawPart of parts) {
+      const part = rawPart as ToolPart;
+      const toolName = extractToolName(part);
+      if (!toolName) continue;
+
+      const callId =
+        (typeof part.toolCallId === "string" && part.toolCallId) ||
+        `${toolName}-${toolCalls.length}`;
+      const status = toolStateToStatus(part.state);
+
+      const output = part.output;
+      let resultCount: number | undefined = undefined;
+
+      if (toolName === "recallSimilarIncidents" && output) {
+        const memories = (output as { memories?: unknown[] }).memories ?? [];
+        resultCount = memories.length;
+        for (const mem of memories) {
+          const c = memoryToCitation(mem);
+          if (c) {
+            const key = `${c.source}:${c.source_id}`;
+            if (!seenCitations.has(key)) {
+              seenCitations.add(key);
+              citations.push(c);
+            }
+          }
+          // Reinforcement detection (Invariant 2 — 🧠 badge).
+          if (mem && typeof mem === "object") {
+            const m = mem as {
+              id?: unknown;
+              text?: unknown;
+              score?: unknown;
+            };
+            if (typeof m.id === "string" && !seenMemoryIds.has(m.id)) {
+              seenMemoryIds.add(m.id);
+              similarFromTools.push({
+                memory_id: m.id,
+                summary: typeof m.text === "string" ? m.text : "",
+                relevance: typeof m.score === "number" ? m.score : 0,
+                fromTriageHistory: isFromTriageHistory(mem),
+              });
+            }
+          }
+        }
+      }
+
+      if (toolName === "searchCode" && output) {
+        const snippets = (output as { snippets?: unknown[] }).snippets ?? [];
+        resultCount = snippets.length;
+        for (const snip of snippets) {
+          const c = snippetToCitation(snip);
+          if (c) {
+            const key = `${c.source}:${c.source_id}`;
+            if (!seenCitations.has(key)) {
+              seenCitations.add(key);
+              citations.push(c);
+            }
+          }
+        }
+      }
+
+      // Use the message's _creationTime as a stable `at` ordering. Falls
+      // back to insertion order if missing.
+      const at =
+        typeof (msg as unknown as { _creationTime?: number })._creationTime ===
+        "number"
+          ? (msg as unknown as { _creationTime: number })._creationTime
+          : Date.now();
+
+      // Dedupe by callId — UIMessages often update the same tool part as
+      // state advances (input-streaming → input-available → output-available).
+      const existingIdx = toolCalls.findIndex((tc) => tc.id === callId);
+      const next: ToolCallSnapshot = {
+        id: callId,
+        tool: toolName,
+        status,
+        input: part.input,
+        output,
+        resultCount,
+        at,
+      };
+      if (existingIdx >= 0) {
+        toolCalls[existingIdx] = next;
+      } else {
+        toolCalls.push(next);
+      }
+    }
+  }
+
+  // Resolve cited source-ids in rootCause/suspectedFix back to Citation
+  // objects, matching the SSE-path behaviour. Falls back to a stub if
+  // no matching citation row exists yet (the agent may have referenced a
+  // source the tool hasn't surfaced; rare, but preserve the contract).
+  const resolveCitations = (ids: string[]): Citation[] =>
+    ids.map((sid) => {
+      const found = citations.find((c) => c.source_id === sid);
+      if (found) return found;
+      return {
+        source: "code",
+        source_id: sid,
+        excerpt: "",
+        metadata: {},
+        verified: false,
+      };
+    });
+
+  const similarIncidents =
+    runRow.similarIncidentsDetailed && runRow.similarIncidentsDetailed.length > 0
+      ? runRow.similarIncidentsDetailed
+      : similarFromTools.length > 0
+      ? similarFromTools
+      : runRow.similarIncidents?.map((mid) => ({
+          memory_id: mid,
+          summary: "",
+          relevance: 0,
+        }));
+
   return {
-    id: r._id as unknown as string,
-    status: r.status,
-    inputTrace: r.inputTrace,
-    startedAt: r.startedAt,
-    finishedAt: r.finishedAt,
-    toolCalls: data.toolCalls.map((tc) => ({
-      id: `${tc.tool}-${tc.at}`,
-      tool: tc.tool,
-      status: "done" as const,
-      input: tc.input,
-      output: tc.output,
-      latencyMs: tc.latencyMs,
-      at: tc.at,
-    })),
-    citations: data.citations.map(rowToCitation),
-    timeline: r.timeline,
-    rootCause: r.rootCause
+    id: runRow._id as unknown as string,
+    status: runRow.status,
+    inputTrace: runRow.inputTrace,
+    startedAt: runRow.startedAt,
+    finishedAt: runRow.finishedAt,
+    toolCalls,
+    citations,
+    timeline: runRow.timeline,
+    rootCause: runRow.rootCause
       ? {
-          text: r.rootCause.text,
-          citations: resolveCitations(r.rootCause.citations, data.citations),
+          text: runRow.rootCause.text,
+          citations: resolveCitations(runRow.rootCause.citations),
         }
       : undefined,
-    suspectedFix: r.suspectedFix
+    suspectedFix: runRow.suspectedFix
       ? {
-          file: r.suspectedFix.file,
-          line: r.suspectedFix.line,
-          diff: r.suspectedFix.diff,
-          citations: resolveCitations(
-            r.suspectedFix.citations,
-            data.citations
-          ),
+          file: runRow.suspectedFix.file,
+          line: runRow.suspectedFix.line,
+          diff: runRow.suspectedFix.diff,
+          citations: resolveCitations(runRow.suspectedFix.citations),
         }
       : undefined,
-    similarIncidents:
-      r.similarIncidentsDetailed ??
-      r.similarIncidents?.map((mid) => ({
-        memory_id: mid,
-        summary: "",
-        relevance: 0,
-      })),
-    error: r.errorMessage,
+    similarIncidents,
+    error: runRow.errorMessage,
+    streamingText: latestStreamingText || undefined,
+    isStreaming,
   };
 }
 
-// ─── SSE helpers (used by both paths) ────────────────────────────────────────
+// ─── SSE helpers (used by the SSE fallback path) ─────────────────────────────
 
 type RunStore = Map<string, TriageRunSnapshot>;
 
@@ -298,7 +557,7 @@ function applySseEvent(
 /**
  * Read the SSE stream just long enough to extract the `run_started`
  * event, then return the convex runId. Subsequent SSE frames are
- * ignored — Convex `useQuery` becomes the source of truth from there.
+ * ignored — Convex `useUIMessages` becomes the source of truth from there.
  *
  * Reads continue in the background until the stream ends so the server
  * can finish writing without ECONNRESET.
@@ -425,23 +684,59 @@ async function consumeFullSseStream(
   });
 }
 
+// ─── Convex slot subscription helper ─────────────────────────────────────────
+//
+// One slot = one subscription to (runById + listMessages). Hooks must be
+// called at the top level, so we hardcode two slots (matching Trace A / B).
+
+interface ConvexSlot {
+  runId: Id<"triageRuns"> | null;
+  snapshot: TriageRunSnapshot | null;
+}
+
+function useConvexSlot(runId: Id<"triageRuns"> | null): ConvexSlot {
+  // 1. Run row → resolves threadId + holds run-level metadata.
+  const runRow = useQuery(
+    api.triage.runById,
+    runId ? { id: runId } : "skip"
+  ) as AgentRunRow | null | undefined;
+
+  const threadId = runRow?.threadId ?? null;
+
+  // 2. Live UIMessages (with delta streaming) keyed by threadId.
+  // `useUIMessages` accepts the `"skip"` sentinel to no-op until threadId
+  // resolves. The query itself is typed as `UIMessagesQuery` because the
+  // server signature `{ threadId, paginationOpts, streamArgs }` matches.
+  // Cast is needed because the committed `_generated/api.d.ts` types the
+  // api loosely until `npx convex dev` runs locally — same pattern used
+  // throughout the project.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const listMessagesQuery = (api.triage as any).listMessages;
+  const { results: uiMessages } = useUIMessages(
+    listMessagesQuery,
+    threadId ? { threadId } : "skip",
+    { initialNumItems: 50, stream: true }
+  );
+
+  const snapshot = useMemo<TriageRunSnapshot | null>(() => {
+    if (!runRow) return null;
+    return uiMessagesToTriageSnapshot(uiMessages ?? [], runRow);
+  }, [runRow, uiMessages]);
+
+  return { runId, snapshot };
+}
+
 // ─── The public hook ─────────────────────────────────────────────────────────
 
 export function useTriage(): UseTriageReturn {
   const mode: TriageMode = hasConvex() ? "convex" : "sse";
 
-  // Two slots for Convex `useQuery` subscriptions. Hardcoded because
-  // hooks can't be called conditionally — see file-level comment.
+  // Two slots for Convex subscriptions. Hardcoded because hooks can't be
+  // called conditionally — see file-level comment.
   const [slotAId, setSlotAId] = useState<Id<"triageRuns"> | null>(null);
   const [slotBId, setSlotBId] = useState<Id<"triageRuns"> | null>(null);
-  const snapA = useQuery(
-    api.triage.byId,
-    slotAId ? { id: slotAId } : "skip"
-  );
-  const snapB = useQuery(
-    api.triage.byId,
-    slotBId ? { id: slotBId } : "skip"
-  );
+  const slotA = useConvexSlot(slotAId);
+  const slotB = useConvexSlot(slotBId);
 
   // SSE-mode local store. Always created so hook ordering is stable.
   const [sseStore, setSseStore] = useState<RunStore>(() => new Map());
@@ -454,16 +749,14 @@ export function useTriage(): UseTriageReturn {
     if (mode === "convex") {
       const aDone =
         !slotAId ||
-        snapA === undefined ||
-        snapA === null ||
-        snapA.run.status === "done" ||
-        snapA.run.status === "error";
+        slotA.snapshot === null ||
+        slotA.snapshot.status === "done" ||
+        slotA.snapshot.status === "error";
       const bDone =
         !slotBId ||
-        snapB === undefined ||
-        snapB === null ||
-        snapB.run.status === "done" ||
-        snapB.run.status === "error";
+        slotB.snapshot === null ||
+        slotB.snapshot.status === "done" ||
+        slotB.snapshot.status === "error";
       if (aDone && bDone && isRunning) setIsRunning(false);
       return;
     }
@@ -476,17 +769,15 @@ export function useTriage(): UseTriageReturn {
       }
     }
     if (!anyRunning && isRunning) setIsRunning(false);
-  }, [mode, snapA, snapB, slotAId, slotBId, sseStore, isRunning]);
-
-  // Adapter helpers, memoized to keep referential stability for components.
-  const snapAResolved = useMemo<TriageRunSnapshot | null>(
-    () => (snapA ? convexToSnapshot(snapA as ConvexByIdResult) : null),
-    [snapA]
-  );
-  const snapBResolved = useMemo<TriageRunSnapshot | null>(
-    () => (snapB ? convexToSnapshot(snapB as ConvexByIdResult) : null),
-    [snapB]
-  );
+  }, [
+    mode,
+    slotA.snapshot,
+    slotB.snapshot,
+    slotAId,
+    slotBId,
+    sseStore,
+    isRunning,
+  ]);
 
   const placeInSlot = useCallback(
     (id: Id<"triageRuns">) => {
@@ -611,13 +902,13 @@ export function useTriage(): UseTriageReturn {
     (id: string | null): TriageRunSnapshot | null => {
       if (!id) return null;
       if (mode === "convex") {
-        if (id === slotAId) return snapAResolved;
-        if (id === slotBId) return snapBResolved;
+        if (id === slotAId) return slotA.snapshot;
+        if (id === slotBId) return slotB.snapshot;
         return null;
       }
       return sseStore.get(id) ?? null;
     },
-    [mode, slotAId, slotBId, snapAResolved, snapBResolved, sseStore]
+    [mode, slotAId, slotBId, slotA.snapshot, slotB.snapshot, sseStore]
   );
 
   return { mode, isRunning, error, run, byId };

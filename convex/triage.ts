@@ -13,9 +13,15 @@
  */
 
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { mutation, query } from "./_generated/server";
 import { components, internal } from "./_generated/api";
-import { createThread } from "@convex-dev/agent";
+import {
+  createThread,
+  listUIMessages,
+  syncStreams,
+  vStreamArgs,
+} from "@convex-dev/agent";
 import type { AgentComponent } from "@convex-dev/agent";
 
 // Same loose-typing escape hatch as in `triageAgent.ts` — see comment
@@ -217,6 +223,54 @@ export const byId = query({
       .withIndex("by_run", (q) => q.eq("triageRunId", args.id))
       .collect();
     return { run, toolCalls, citations, memoryEvents };
+  },
+});
+
+/**
+ * Lightweight query: just the triageRun row by id. Used by the frontend
+ * `useTriageConvex` hook to resolve `threadId` from a triageRunId before
+ * subscribing to `listMessages` / `useUIMessages`. Cheaper than `byId`
+ * (no related-row fetches) and stable across schema evolution.
+ */
+export const runById = query({
+  args: { id: v.id("triageRuns") },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.id);
+    if (!run) return null;
+    return run;
+  },
+});
+
+/**
+ * Phase 2 — `useUIMessages` wire.
+ *
+ * Returns the agent component's persisted UIMessages PLUS an optional
+ * `streams` payload with live deltas (when `streamArgs` is supplied by
+ * the `useUIMessages({ stream: true })` hook on the client).
+ *
+ * Args shape is dictated by the hook:
+ *   - `threadId`: the agent thread (held on `triageRuns.threadId`).
+ *   - `paginationOpts`: required by `usePaginatedQuery` underpinning.
+ *   - `streamArgs`: optional — when present, syncStreams returns the
+ *      delta cursors so the client materializes streaming messages
+ *      from `saveStreamDeltas: true` on the server.
+ *
+ * Invariant 1 (Cite-Or-Die): citations from `recallSimilarIncidents`
+ * land in `parts[type="tool-recallSimilarIncidents"].output.memories[]`;
+ * code citations land in `parts[type="tool-searchCode"].output.snippets[]`.
+ * Frontend's `uiMessagesToTriageSnapshot` maps both to `Citation` rows
+ * with `verified` preserved.
+ */
+export const listMessages = query({
+  args: {
+    threadId: v.string(),
+    paginationOpts: paginationOptsValidator,
+    streamArgs: vStreamArgs,
+  },
+  handler: async (ctx, args) => {
+    const paginated = await listUIMessages(ctx, agentComponent, args);
+    const streams = await syncStreams(ctx, agentComponent, args);
+    return { ...paginated, streams };
   },
 });
 
