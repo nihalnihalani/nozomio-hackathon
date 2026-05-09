@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * useTriage — abstracts Convex `useMutation/useQuery` vs `/api/triage` SSE.
+ * useTriage — dual-mode hook abstracting Convex `useMutation`/`useQueries`
+ * vs the `/api/triage` SSE fallback.
  *
  * Both modes expose the SAME interface so the UI doesn't branch:
  *   const { run, byId, isRunning, error, mode } = useTriage();
@@ -9,17 +10,28 @@
  * - `run({ trace })`  → returns `triageRunId: string`
  * - `byId(id)`        → returns reactive `TriageRunSnapshot` (or null while loading)
  *
- * Convex path: Used when `NEXT_PUBLIC_CONVEX_URL` is set AND the codegen'd
- * `convex/_generated/api` module is importable. The Backend Engineer wires
- * `convex/triage.ts` exports `run` (mutation) and `byId` (query).
+ * Convex path: Used when `NEXT_PUBLIC_CONVEX_URL` is set. Calls
+ * `useMutation(api.triage.start)` to kick off a run, then
+ * `useQueries({ ... api.triage.byId, args: { id } })` to live-stream the
+ * snapshot from Convex tables (triageRuns + toolCalls + citations). The
+ * raw shape is reshaped via `convexSnapshotToTriageSnapshot()` so UI
+ * components consume the SAME `TriageRunSnapshot` regardless of mode.
  *
- * SSE path: POSTs `{ trace }` to `/api/triage`, consumes Server-Sent Events,
- * and accumulates a snapshot in local React state keyed by client-side
- * generated id.
+ * SSE path: POSTs `{ trace }` to `/api/triage`, consumes Server-Sent
+ * Events, and accumulates a snapshot in local React state keyed by a
+ * client-generated id. This is the no-keys default that lets the demo
+ * work for judges who clone fresh — see Invariant 4 (Hermetic Demo Mode).
+ *
+ * Mode is decided at module-load time by `NEXT_PUBLIC_CONVEX_URL` (which
+ * Next.js inlines at build time). The decision is therefore stable across
+ * a given build, so calling `useMutation`/`useQueries` only inside the
+ * Convex sub-hook does NOT violate the rules-of-hooks ordering invariant.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { Citation } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQueries } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import type { Citation, SourceType } from "@/lib/types";
 
 // ─── Snapshot shape (frontend-side mirror of Convex triageRuns + relations) ──
 
@@ -88,15 +100,192 @@ export interface UseTriageReturn {
   byId: (id: string | null) => TriageRunSnapshot | null;
 }
 
-// ─── Convex hook attempt (lazy-loaded; tolerant of missing codegen) ──────────
+// ─── Mode detection ──────────────────────────────────────────────────────────
 //
-// We can't statically import `convex/_generated/api` because it might not
-// exist yet during the frontend build before backend codegen runs. Instead,
-// we read `NEXT_PUBLIC_CONVEX_URL`; if set, we *try* to use Convex. If the
-// codegen is missing at runtime the hook falls back to SSE without crashing.
+// `NEXT_PUBLIC_CONVEX_URL` is inlined by Next.js at build time, so this is a
+// build-time constant. That makes the hook ordering in `useTriage` stable
+// across renders — we always invoke the same sub-hook for a given build.
 
 function hasConvex(): boolean {
   return Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
+}
+
+// In tests / non-demo orgs we may want to override this. For the demo path
+// the orgId is fixed to match the API route default ("demo-org").
+const DEMO_ORG_ID = "demo-org";
+
+// ─── Convex → TriageRunSnapshot reshape ──────────────────────────────────────
+//
+// The Convex `byId` query returns `{ run, toolCalls, citations, memoryEvents }`
+// (see convex/triage.ts). We need to flatten that into the same shape the SSE
+// path produces so `TraceUI` / `ResultCards` don't fork.
+//
+// We isolate the (small amount of) `as any` shape-bridging here so the rest
+// of the hook stays clean. Convex's typed api stub is `AnyApi`-based until
+// `npx convex dev` codegens real types — meaning the result of useQueries is
+// `unknown`/`any` at compile time, which we explicitly narrow below.
+
+interface ConvexRunDoc {
+  _id: string;
+  orgId?: string;
+  inputTrace: string;
+  status: TriageStatus;
+  startedAt: number;
+  finishedAt?: number;
+  timeline?: TimelineEntry[];
+  rootCause?: { text: string; citations: string[] };
+  suspectedFix?: {
+    file: string;
+    line: number;
+    diff: string;
+    citations: string[];
+  };
+  similarIncidents?: string[];
+  errorMessage?: string;
+}
+
+interface ConvexCitationDoc {
+  _id: string;
+  triageRunId: string;
+  source: SourceType;
+  sourceId: string;
+  excerpt: string;
+  metadata: Record<string, unknown> | null | undefined;
+  verified: boolean;
+}
+
+interface ConvexToolCallDoc {
+  _id: string;
+  triageRunId: string;
+  tool: "recallSimilarIncidents" | "searchCode";
+  input: unknown;
+  output: unknown;
+  latencyMs: number;
+  at: number;
+}
+
+interface ConvexByIdResult {
+  run: ConvexRunDoc;
+  toolCalls: ConvexToolCallDoc[];
+  citations: ConvexCitationDoc[];
+  // memoryEvents shape isn't needed for the snapshot.
+  memoryEvents: unknown[];
+}
+
+function citationDocToCitation(c: ConvexCitationDoc): Citation {
+  return {
+    source: c.source,
+    source_id: c.sourceId,
+    excerpt: c.excerpt,
+    metadata: (c.metadata as Record<string, unknown> | undefined) ?? undefined,
+    verified: c.verified,
+  };
+}
+
+function toolCallDocToSnapshot(t: ConvexToolCallDoc): ToolCallSnapshot {
+  // Convex toolCalls are written AFTER the tool returns, so they're always
+  // "done" by the time we observe them. The reactive query naturally picks
+  // up the new row on insert — no separate "running" frame is needed.
+  return {
+    id: t._id,
+    tool: t.tool,
+    status: "done",
+    input: t.input,
+    output: t.output,
+    resultCount: countResults(t.tool, t.output),
+    latencyMs: t.latencyMs,
+    at: t.at,
+  };
+}
+
+function countResults(tool: ToolCallSnapshot["tool"], output: unknown): number | undefined {
+  if (output == null || typeof output !== "object") return undefined;
+  const o = output as Record<string, unknown>;
+  if (tool === "recallSimilarIncidents" && Array.isArray(o.memories)) {
+    return (o.memories as unknown[]).length;
+  }
+  if (tool === "searchCode" && Array.isArray(o.snippets)) {
+    return (o.snippets as unknown[]).length;
+  }
+  return undefined;
+}
+
+/**
+ * Reshape a `convex/triage.byId` reactive query result into the
+ * `TriageRunSnapshot` the UI expects. ISOLATED `as any`-style narrowing
+ * lives here so the rest of the codebase stays type-clean.
+ */
+function convexSnapshotToTriageSnapshot(
+  raw: unknown
+): TriageRunSnapshot | null {
+  if (!raw || typeof raw !== "object") return null;
+  const result = raw as ConvexByIdResult;
+  if (!result.run) return null;
+  const run = result.run;
+
+  // Citation lookup by Convex `_id` so rootCause/suspectedFix's citation-id
+  // arrays can be hydrated to full Citation objects. The hot-path schema
+  // stores the IDs (string[]); the UI wants full Citation[].
+  const citationsById = new Map<string, Citation>();
+  const citationsList: Citation[] = [];
+  for (const c of result.citations ?? []) {
+    const cit = citationDocToCitation(c);
+    citationsById.set(c._id, cit);
+    citationsList.push(cit);
+  }
+
+  const hydrateCitations = (ids: string[] | undefined): Citation[] => {
+    if (!ids) return [];
+    return ids
+      .map((id) => citationsById.get(id))
+      .filter((c): c is Citation => Boolean(c));
+  };
+
+  const rootCause: RootCause | undefined = run.rootCause
+    ? {
+        text: run.rootCause.text,
+        citations: hydrateCitations(run.rootCause.citations),
+      }
+    : undefined;
+
+  const suspectedFix: SuspectedFix | undefined = run.suspectedFix
+    ? {
+        file: run.suspectedFix.file,
+        line: run.suspectedFix.line,
+        diff: run.suspectedFix.diff,
+        citations: hydrateCitations(run.suspectedFix.citations),
+      }
+    : undefined;
+
+  // The hot-path schema stores `similarIncidents` as `string[]` (memory ids
+  // referenced from a separate memory store). The full SimilarIncident
+  // shape (summary, relevance, fromTriageHistory) is only available on the
+  // `result` event, which the SSE path renders directly. For the Convex
+  // reactive path we surface the ids with placeholder summaries so the
+  // SimilarIncidentsCard renders SOMETHING; the agent's full output is also
+  // persisted server-side and can be fetched via a separate query later.
+  const similarIncidents: SimilarIncident[] | undefined = run.similarIncidents
+    ? run.similarIncidents.map((memory_id) => ({
+        memory_id,
+        summary: "",
+        relevance: 0,
+      }))
+    : undefined;
+
+  return {
+    id: run._id,
+    status: run.status,
+    inputTrace: run.inputTrace,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    toolCalls: (result.toolCalls ?? []).map(toolCallDocToSnapshot),
+    citations: citationsList,
+    timeline: run.timeline,
+    rootCause,
+    suspectedFix,
+    similarIncidents,
+    error: run.errorMessage,
+  };
 }
 
 // ─── SSE-mode implementation ─────────────────────────────────────────────────
@@ -234,11 +423,7 @@ async function consumeSseStream(
   });
 }
 
-export function useTriage(): UseTriageReturn {
-  const mode: TriageMode = hasConvex() ? "convex" : "sse";
-
-  // SSE-mode store. We keep it even in convex-mode (cheap, unused) so hook
-  // ordering is stable across mode flips during dev.
+function useTriageSse(): UseTriageReturn {
   const [store, setStore] = useState<RunStore>(() => new Map());
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -260,20 +445,6 @@ export function useTriage(): UseTriageReturn {
   const run = useCallback(
     async ({ trace }: { trace: string }): Promise<string> => {
       setError(null);
-
-      // INTEGRATION HOOK (Backend Engineer):
-      // When `convex/_generated/api` exists and exports `api.triage.run` +
-      // `api.triage.byId`, swap this hook to call the Convex mutation here:
-      //
-      //   import { useMutation, useQuery } from "convex/react";
-      //   import { api } from "@/convex/_generated/api";
-      //   const runMut = useMutation(api.triage.run);
-      //   ...
-      //
-      // The mode is currently determined by `NEXT_PUBLIC_CONVEX_URL`; the
-      // SSE path below is the working fallback that the SSE `/api/triage`
-      // route powers. Both paths produce the SAME `TriageRunSnapshot` shape.
-      void mode;
 
       const id = makeId();
       inFlightRef.current.add(id);
@@ -340,7 +511,7 @@ export function useTriage(): UseTriageReturn {
       }
       return id;
     },
-    [mode]
+    []
   );
 
   const byId = useCallback(
@@ -351,5 +522,117 @@ export function useTriage(): UseTriageReturn {
     [store]
   );
 
-  return { mode, isRunning, error, run, byId };
+  return { mode: "sse", isRunning, error, run, byId };
+}
+
+// ─── Convex-mode implementation ──────────────────────────────────────────────
+
+function useTriageConvex(): UseTriageReturn {
+  // The set of runIds we want to subscribe to. Each `run()` call pushes a new
+  // id; `useQueries` then reactively materializes a snapshot per id. We never
+  // remove ids — the surrounding component owns at most 2 (Trace A and B),
+  // and the upper bound on dev-session subscription growth is acceptable.
+  const [subscribedIds, setSubscribedIds] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  // Convex's typed api here is `AnyApi` until `npx convex dev` codegens
+  // real types. The mutation+queries still wire correctly at runtime; the
+  // type-bridge `as never` here is the single isolated "any-style" cast.
+  // The runtime call uses the same FunctionReference shape codegen produces.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const startMut = useMutation((api as any).triage.start);
+
+  // Build the useQueries request map, one entry per subscribed id.
+  const queryRequest = useMemo(() => {
+    const req: Record<string, { query: unknown; args: { id: string } }> = {};
+    for (const id of subscribedIds) {
+      req[id] = {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        query: (api as any).triage.byId,
+        args: { id },
+      };
+    }
+    return req;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subscribedIds]);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const queryResults = useQueries(queryRequest as any) as Record<string, unknown>;
+
+  // Compute snapshots once per render and cache by id.
+  const snapshotsById = useMemo(() => {
+    const map = new Map<string, TriageRunSnapshot | null>();
+    for (const id of subscribedIds) {
+      const raw = queryResults[id];
+      if (raw instanceof Error) {
+        // useQueries returns Error if the query throws server-side. Surface
+        // as an error snapshot rather than throwing — matches SSE behavior.
+        map.set(id, {
+          id,
+          status: "error",
+          inputTrace: "",
+          startedAt: Date.now(),
+          toolCalls: [],
+          citations: [],
+          error: raw.message,
+        });
+        continue;
+      }
+      map.set(id, convexSnapshotToTriageSnapshot(raw));
+    }
+    return map;
+  }, [queryResults, subscribedIds]);
+
+  // Derive isRunning from the union of subscribed snapshots.
+  const isRunning = useMemo(() => {
+    for (const snap of snapshotsById.values()) {
+      if (!snap) continue;
+      if (snap.status === "pending" || snap.status === "running") return true;
+    }
+    return false;
+  }, [snapshotsById]);
+
+  const run = useCallback(
+    async ({ trace }: { trace: string }): Promise<string> => {
+      setError(null);
+      try {
+        const newId = (await startMut({
+          orgId: DEMO_ORG_ID,
+          trace,
+        })) as string;
+        // Immediately subscribe so the UI sees the row materialize.
+        setSubscribedIds((prev) => (prev.includes(newId) ? prev : [...prev, newId]));
+        return newId;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "convex mutation failed";
+        setError(message);
+        // Still return a synthetic id so the caller doesn't crash; it'll
+        // show up as null in `byId` (no subscription) but `error` is set.
+        throw e;
+      }
+    },
+    [startMut]
+  );
+
+  const byId = useCallback(
+    (id: string | null): TriageRunSnapshot | null => {
+      if (!id) return null;
+      return snapshotsById.get(id) ?? null;
+    },
+    [snapshotsById]
+  );
+
+  return { mode: "convex", isRunning, error, run, byId };
+}
+
+// ─── Public hook ─────────────────────────────────────────────────────────────
+//
+// `hasConvex()` is a build-time constant (Next.js inlines NEXT_PUBLIC_*),
+// so the choice between the Convex and SSE sub-hook is stable for a given
+// build. That keeps the hook ordering deterministic per React's rules even
+// though we appear to "conditionally" pick a hook.
+
+export function useTriage(): UseTriageReturn {
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return hasConvex() ? useTriageConvex() : useTriageSse();
 }

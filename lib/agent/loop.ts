@@ -155,6 +155,94 @@ export function* extractCitations(result: TriageResult): Iterable<Citation> {
   for (const c of result.suspected_fix.citations) yield c;
 }
 
+// ─── Session reinforcement state (Codex finding #3) ──────────────────────────
+//
+// Per-org marker that Trace A has been run "recently." Trace B's reinforced
+// citations (the retry-budget DM + the triage_history trail) are gated on
+// this — without a prior Trace A run, those citations are stripped from the
+// response so the demo doesn't claim memory was reinforced when it wasn't.
+//
+// Module-level state is acceptable here because the Next.js dev/prod server
+// is a single Node process. In a multi-instance deploy this would need to
+// move to a shared store (Redis, Convex memoryEvents); flagged as Layer-2.
+const TRACE_A_RUN_STATE = new Map<
+  string,
+  { traceASignature: string; at: number }
+>();
+const TRACE_A_RUN_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function isTraceAFixture(fixture: ReplayFixture): boolean {
+  // Trace A is the one whose recall output does NOT contain any reinforced
+  // memory_ids (mem_reinforce_* or metadata.kind === triage_history).
+  // Trace B is the one that DOES.
+  for (const tc of fixture.tool_calls) {
+    if (tc.tool !== "recallSimilarIncidents") continue;
+    const out = tc.output as { memories?: Memory[] };
+    for (const m of out.memories ?? []) {
+      const isReinforced =
+        m.id.startsWith("mem_reinforce_") ||
+        (m.metadata as { kind?: string } | undefined)?.kind ===
+          "triage_history";
+      if (isReinforced) return false;
+    }
+  }
+  return true;
+}
+
+function recordTraceARun(orgId: string, signature: string) {
+  TRACE_A_RUN_STATE.set(orgId, { traceASignature: signature, at: Date.now() });
+}
+
+function hasTraceARunRecently(orgId: string): boolean {
+  const entry = TRACE_A_RUN_STATE.get(orgId);
+  if (!entry) return false;
+  return Date.now() - entry.at < TRACE_A_RUN_TTL_MS;
+}
+
+/**
+ * Strip the reinforced citations + memory_ids from a Trace B result so the
+ * agent doesn't claim memory was reinforced when no prior Trace A ran.
+ * The user still gets a triage — just without the retry-budget DM and the
+ * triage_history trail.
+ */
+function stripReinforcedCitations(result: TriageResult): TriageResult {
+  const isReinforcedId = (id: string) =>
+    id.startsWith("mem_reinforce_") ||
+    id === "mem_slk_dm_feb18_retry_budget";
+  // Patterns we filter out of timeline event TEXT — the fixture's narrative
+  // mentions the reinforced memory IDs by name, which would still claim
+  // memory was reinforced even if we strip citations.
+  const reinforcedTextPatterns = [
+    /mem_reinforce_/,
+    /mem_slk_dm_feb18/,
+    /Reinforced memory/i,
+    /Reinforcement-surfaced/i,
+  ];
+  const isReinforcedTimelineEvent = (eventText: string) =>
+    reinforcedTextPatterns.some((re) => re.test(eventText));
+  return {
+    ...result,
+    timeline: result.timeline.filter(
+      (e) => !isReinforcedTimelineEvent(e.event)
+    ),
+    root_cause: {
+      ...result.root_cause,
+      citations: result.root_cause.citations.filter(
+        (c) => !isReinforcedId(c.source_id)
+      ),
+    },
+    suspected_fix: {
+      ...result.suspected_fix,
+      citations: result.suspected_fix.citations.filter(
+        (c) => !isReinforcedId(c.source_id)
+      ),
+    },
+    similar_incidents: result.similar_incidents.filter(
+      (s) => !isReinforcedId(s.memory_id)
+    ),
+  };
+}
+
 // ─── Replay runner ────────────────────────────────────────────────────────────
 
 async function runReplay(
@@ -176,21 +264,48 @@ async function runReplay(
     return null;
   }
 
+  // Codex finding #3: Trace B's reinforced citations are gated on a prior
+  // Trace A run for the same orgId within TRACE_A_RUN_TTL_MS. If no such
+  // run is recorded, we serve a degraded Trace B (without the retry-budget
+  // DM + reinforcement trail) and surface a status event explaining why.
+  // This makes the dependency between the two traces honest rather than
+  // theatrical: the wow moment ONLY fires after Trace A has actually run.
+  const isTraceA = isTraceAFixture(fixture);
+  const traceAValid = hasTraceARunRecently(input.orgId);
+  const degradeReinforcement = !isTraceA && !traceAValid;
+
   await emit({ type: "status", status: "running" });
 
   for (const tc of fixture.tool_calls) {
     if (tc.delay_ms > 0) await sleep(tc.delay_ms);
     const at = Date.now();
+    // If we're in degrade mode, also strip reinforced memories from the
+    // tool_call output so the live trace UI doesn't show citations the
+    // final result will then drop. Honesty top-to-bottom.
+    let outputForEmit = tc.output;
+    if (degradeReinforcement && tc.tool === "recallSimilarIncidents") {
+      const out = tc.output as { memories?: Memory[] };
+      outputForEmit = {
+        memories: (out.memories ?? []).filter((m) => {
+          const isReinforced =
+            m.id.startsWith("mem_reinforce_") ||
+            (m.metadata as { kind?: string } | undefined)?.kind ===
+              "triage_history" ||
+            m.id === "mem_slk_dm_feb18_retry_budget";
+          return !isReinforced;
+        }),
+      };
+    }
     await emit({
       type: "tool_call",
       tool: tc.tool,
       input: tc.input,
-      output: tc.output,
+      output: outputForEmit,
       latencyMs: tc.delay_ms,
       at,
     });
     // Surface citations from each tool's output as we stream.
-    for (const c of extractToolCitations(tc.tool, tc.output)) {
+    for (const c of extractToolCitations(tc.tool, outputForEmit)) {
       await emit({ type: "citation", citation: c });
     }
   }
@@ -206,7 +321,7 @@ async function runReplay(
     const out = tc.output as { memories?: Memory[] };
     for (const m of out.memories ?? []) recalledMemoriesById.set(m.id, m);
   }
-  const enrichedResult: TriageResult = {
+  let enrichedResult: TriageResult = {
     ...fixture.result,
     similar_incidents: fixture.result.similar_incidents.map((si) => {
       const mem = recalledMemoriesById.get(si.memory_id);
@@ -217,6 +332,22 @@ async function runReplay(
       return isHistory ? { ...si, fromTriageHistory: true } : si;
     }) as TriageResult["similar_incidents"],
   };
+
+  // Apply the Codex #3 degrade if we determined no prior Trace A.
+  if (degradeReinforcement) {
+    enrichedResult = stripReinforcedCitations(enrichedResult);
+    await emit({
+      type: "error",
+      message:
+        "[degraded] Trace B's reinforced citations are gated on a prior Trace A run. Run Trace A first to see the memory-reinforcement effect.",
+    });
+  }
+
+  // Record the Trace A run so a subsequent Trace B can surface the
+  // reinforced memory honestly.
+  if (isTraceA) {
+    recordTraceARun(input.orgId, fixture.input_trace_pattern);
+  }
 
   await emit({ type: "result", result: enrichedResult });
   await emit({ type: "status", status: "done" });
@@ -452,10 +583,73 @@ async function runLive(
   return parsed;
 }
 
+// ─── Hybrid mode (Codex finding #6) ───────────────────────────────────────────
+
+/**
+ * Hybrid mode: race live mode against a HYBRID_LIVE_BUDGET_MS timer.
+ * If live completes within budget, flush its events to the real sink and
+ * return its result. If the timer wins, drop the buffered live events
+ * (we can't cancel streamText cleanly mid-flight) and fall back to replay.
+ *
+ * This is genuine timeout behavior, not a synonym for `live`. The previous
+ * implementation routed `hybrid` directly to `runLive`, which Codex flagged
+ * as deceptive. Now hybrid actually enforces a budget.
+ */
+async function runHybrid(
+  input: RunAgentInput,
+  emit: EventSink
+): Promise<TriageResult | null> {
+  const budgetMs = Math.max(
+    1000,
+    parseInt(process.env.HYBRID_LIVE_BUDGET_MS ?? "8000", 10)
+  );
+  // No key → no live possible → straight to replay (no theater)
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return await runReplay(input, emit);
+  }
+  // Buffer live events; only flush if live wins the race.
+  const buffered: AgentEvent[] = [];
+  const bufferingSink: EventSink = (e) => {
+    buffered.push(e);
+  };
+
+  let liveDone = false;
+  const livePromise: Promise<TriageResult | null> = runLive(
+    input,
+    bufferingSink
+  )
+    .then((r) => {
+      liveDone = true;
+      return r;
+    })
+    .catch(() => {
+      liveDone = true;
+      return null;
+    });
+  const timerPromise = new Promise<"timeout">((resolve) =>
+    setTimeout(() => resolve("timeout"), budgetMs)
+  );
+
+  const winner = await Promise.race([livePromise, timerPromise]);
+  if (winner !== "timeout" && liveDone) {
+    // Live won: flush buffered events to real sink
+    for (const e of buffered) await emit(e);
+    return winner as TriageResult | null;
+  }
+  // Timeout: discard buffered events, fall through to replay.
+  // (The backgrounded live promise will still resolve eventually but its
+  // events go to the buffer, not the real sink — silent drop.)
+  await emit({
+    type: "error",
+    message: `Live mode exceeded ${budgetMs}ms budget — falling back to replay.`,
+  });
+  return await runReplay(input, emit);
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 /**
- * Run the agent. Selects live vs replay based on getDemoMode().
+ * Run the agent. Selects live / replay / hybrid based on getDemoMode().
  * Always emits at least one `status` event followed by a terminal
  * `result` or `error`. Idempotent w.r.t. side effects in replay mode.
  */
@@ -469,8 +663,10 @@ export async function runAgent(
     if (mode === "replay") {
       return await runReplay(input, emit);
     }
-    // hybrid + live both go to runLive; runLive falls back to replay
-    // internally on any error (Invariant 4).
+    if (mode === "hybrid") {
+      return await runHybrid(input, emit);
+    }
+    // mode === "live"
     return await runLive(input, emit);
   } catch (err) {
     await emit({ type: "error", message: (err as Error).message });

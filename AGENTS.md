@@ -1,17 +1,17 @@
-# Project Rules for Claude Code
+# Project Rules for Codex
 
 ## ⚠️ Codex Reviews Every Change
 
-> **Critical:** every commit Claude Code authors in this repo is reviewed by **OpenAI Codex** before merge. Codex is the second pair of eyes — it catches what Claude Code misses. Treat each PR as a piece of work that has to survive an independent agent's audit, not just `npm test`.
+> **Critical:** every commit Codex authors in this repo is reviewed by **OpenAI Codex** before merge. Codex is the second pair of eyes — it catches what Codex misses. Treat each PR as a piece of work that has to survive an independent agent's audit, not just `npm test`.
 >
 > Concretely:
 > - **No PR auto-merges.** Every PR is held until a Codex review passes.
-> - **Hooks enforce invariant compliance** before the PR even opens (see `.claude/settings.json`). Failing hooks ⇒ NEW commit, never `--amend`.
+> - **Hooks enforce invariant compliance** before the PR even opens (see `.Codex/settings.json`). Failing hooks ⇒ NEW commit, never `--amend`.
 > - **The PR body must list every invariant the change touches** so Codex can spot-check (see §Git Workflow).
 > - If you find yourself thinking *"I'll just push this and Codex will catch it,"* stop and self-review first. The bar is **work Codex won't have notes on** — that's the standard, not "work that compiles."
 > - When Codex pushes back, take it seriously. Don't argue from authority; either fix or escalate to the human Lead with reasoning.
 >
-> The whole point of a two-agent pipeline is independent error detection. If Claude Code writes sloppy code expecting Codex to clean up, the pipeline collapses to one agent doing both jobs poorly.
+> The whole point of a two-agent pipeline is independent error detection. If Codex writes sloppy code expecting Codex to clean up, the pipeline collapses to one agent doing both jobs poorly.
 
 ---
 
@@ -63,7 +63,7 @@ A **3-person team** drives a **5-stage agent loop** that maps an incident input 
 - **Nia** — code-aware monorepo + ADR + runbook indexing; `searchCode` tool; cite-or-die verifier checks `file:line` actually contains claimed code
 - **InsForge** — multi-tenant Postgres + auth (prebuilt magic-link React component) + RLS by `org_id`; mirrors every triage to `incidents` + `audit_log` tables
 - **Frontend** — Next.js 15 App Router + AI SDK 6 + shadcn/ui + reactive `useQuery` over `triageRuns` + `toolCalls` for the live "agent thinking" trace
-- **LLM** — Anthropic Claude direct API (NOT via Vercel AI Gateway — $5 burns too fast on Opus)
+- **LLM** — Anthropic Codex direct API (NOT via Vercel AI Gateway — $5 burns too fast on Opus)
 - **Deploy** — Vercel (frontend) + Convex Cloud (backend); env vars sourced from `.env`
 
 The architecture is split deliberately into **hot path** (Convex) and **cold path** (InsForge) — see Invariant 3.
@@ -74,7 +74,7 @@ The architecture is split deliberately into **hot path** (Convex) and **cold pat
 
 ```text
 triage/
-├── CLAUDE.md                          # this file — rules layer
+├── AGENTS.md                          # this file — rules layer
 ├── PLAN.md                            # execution plan
 ├── IDEAS.md                           # ideation + scoring
 ├── SPONSORS.md                        # sponsor briefs
@@ -83,7 +83,7 @@ triage/
 ├── CHANGELOG.md                       # daily-shipping log (one section per day)
 ├── .env.example                       # documented env shape; never commit secrets
 ├── .gitignore
-├── .claude/
+├── .Codex/
 │   └── settings.json                  # invariant-enforcement hooks
 ├── package.json                       # name: "triage"; Next.js 15
 ├── next.config.ts
@@ -167,7 +167,7 @@ Don't pre-create empty folders. Scaffold each phase as needed.
 
 ## Key Technical Decisions (Invariants)
 
-**These four are non-negotiable. A PR that violates any of them must not merge. Hooks in `.claude/settings.json` enforce them at edit-time where possible. Codex re-checks them on review.**
+**These four are non-negotiable. A PR that violates any of them must not merge. Hooks in `.Codex/settings.json` enforce them at edit-time where possible. Codex re-checks them on review.**
 
 ### Invariant 1 — Cite-Or-Die ★ (the 30% Synthesis play)
 
@@ -201,7 +201,7 @@ Don't pre-create empty folders. Scaffold each phase as needed.
 
 | Path | Owner | Stores | Why |
 | --- | --- | --- | --- |
-| **Hot** | Convex | `triageRuns`, `toolCalls`, `citations`, `memoryEvents` | Reactive `useQuery` for live trace UI; ephemeral; per-session (when `NEXT_PUBLIC_CONVEX_URL` is set; otherwise the Next.js `/api/triage` route serves the same agent loop via SSE — see `lib/hooks/useTriage.ts` for the dual-mode wiring that keeps the demo working with zero keys) |
+| **Hot** | Convex | `triageRuns`, `toolCalls`, `citations`, `memoryEvents` | Reactive `useQuery` for live trace UI; ephemeral; per-session |
 | **Cold** | InsForge (Postgres) | `organizations`, `incidents`, `audit_log` | Multi-tenant RLS; durable; queryable by SREs across years |
 
 **Rules:**
@@ -262,7 +262,7 @@ STACK TRACE INPUT (or Sentry webhook)
                                         Cite-or-die verifier: claimed file:line must
                                         contain claimed code; else drop citation
                 ▼
-   Stage 4 — Compose (Convex Agent)    @convex-dev/agent runs Claude Sonnet
+   Stage 4 — Compose (Convex Agent)    @convex-dev/agent runs Codex Sonnet
                                         with stopWhen: stepCountIs(5)
                                         Streams toolCalls + citations to Convex tables
                                         Frontend useQuery re-renders live
@@ -445,7 +445,7 @@ Every sponsor in the prize stack earns its place. Nothing checkbox-integrated.
 | **Nia** | Code-aware monorepo + ADR + runbook search; cite-or-die verifier | DEEP — `searchCode` is the other tool; host sponsor |
 | **Convex** | `@convex-dev/agent` runtime + reactive `useQuery` for the trace UI + agent state | DEEP — agent component is the runtime spine, not a database |
 | **InsForge** | Multi-tenant Postgres + auth (prebuilt React) + RLS by `org_id` + audit_log | DEEP — cold-path data layer; production-readiness signal |
-| **Anthropic Claude** | LLM (direct API; not via gateway) | DEEP — Sonnet is the agent's brain |
+| **Anthropic Codex** | LLM (direct API; not via gateway) | DEEP — Sonnet is the agent's brain |
 | **Vercel** | Frontend hosting + preview URLs | OPS |
 
 **Skipped sponsors** (decision recorded in `IDEAS.md`):
@@ -603,7 +603,7 @@ Documented in `.env.example`; never commit secrets. See `SETUP_CHECKLIST.md` for
 
 ```bash
 # ─── REQUIRED ────────────────────────────────────────
-ANTHROPIC_API_KEY=                     # Claude direct API (NOT via Vercel AI Gateway — $5 burns fast)
+ANTHROPIC_API_KEY=                     # Codex direct API (NOT via Vercel AI Gateway — $5 burns fast)
 NIA_API_KEY=                           # https://app.trynia.ai → Settings → API Keys
 HYPERSPELL_API_KEY=                    # Hyperspell dashboard or booth (Conor/Manu)
 HYPERSPELL_TOKEN=                      # same value as HYPERSPELL_API_KEY; used by MCP if added
@@ -886,13 +886,13 @@ These are infrastructure choices that signal *"this team will ship after May 9."
 - Nia docs: https://docs.trynia.ai/welcome
 - Convex Agent component: https://docs.convex.dev/agents
 - InsForge docs: https://docs.insforge.dev/introduction
-- Anthropic Claude API: https://docs.anthropic.com/
+- Anthropic Codex API: https://docs.anthropic.com/
 
 ---
 
 ## Appendix — Codex Self-Review Cheat Sheet
 
-When Claude Code is about to push a commit, run this 30-second checklist *before* opening the PR. Codex shouldn't be the first to catch these:
+When Codex is about to push a commit, run this 30-second checklist *before* opening the PR. Codex shouldn't be the first to catch these:
 
 - [ ] Did I touch any of the 4 invariants? If yes, did I update tests + the PR body checklist?
 - [ ] Are all my tool returns of shape `{ ..., citations: Array<{ source, source_id, excerpt, verified }> }`?

@@ -1,0 +1,24 @@
+{
+  "//": "Local tsconfig for Convex code. The repo root tsconfig.json EXCLUDES `convex/` because `_generated/` is git-ignored and may not exist on a fresh clone. This config typechecks `convex/*.ts` AFTER `npx convex codegen` has populated `convex/_generated/`. Used by scripts/check-convex.sh and the optional convex-typecheck CI job.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "allowJs": true,
+    "jsx": "preserve",
+    "types": ["node"],
+    "baseUrl": "..",
+    "paths": {
+      "@/*": ["./*"]
+    }
+  },
+  "include": ["./**/*.ts", "./_generated/**/*.d.ts"],
+  "exclude": ["node_modules"]
+}

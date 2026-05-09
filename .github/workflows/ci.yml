@@ -1,0 +1,127 @@
+# CI for Triage
+# ----------------------------------------------------------------------------
+# Codex review item: "Make Convex deploy cleanly and add a CI check for
+# `npx convex dev --once` or equivalent."
+#
+# Constraint: `npx convex dev` and `npx convex codegen` both require Convex
+# auth (CONVEX_DEPLOYMENT + a login token). Forks and first-time PRs won't
+# have that. So the *primary* CI job runs everything that works WITHOUT auth:
+# typecheck (root tsconfig excludes convex/), invariants, vitest, next build.
+#
+# A *secondary*, non-blocking job runs convex codegen + typecheck against
+# convex/tsconfig.json. It's gated on the CONVEX_DEPLOY_KEY secret being
+# available, and it's `continue-on-error: true` so missing secrets never
+# block a PR.
+# ----------------------------------------------------------------------------
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref (saves CI minutes on rapid pushes).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Primary job — must pass for merge. Does NOT require Convex auth.
+  # --------------------------------------------------------------------------
+  build-and-test:
+    name: build + test (no convex auth)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `convex codegen` needs auth even for offline use. We attempt it and
+      # surface the result as a warning — never block. The root tsconfig
+      # excludes convex/, so the rest of the pipeline does not depend on
+      # _generated/ being present.
+      - name: Convex codegen (best-effort, may fail without auth)
+        id: convex_codegen
+        continue-on-error: true
+        run: |
+          echo "::group::npx convex codegen"
+          if npx convex codegen --typecheck disable; then
+            echo "codegen_ok=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Convex codegen::OK"
+          else
+            echo "codegen_ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Convex codegen skipped::npx convex codegen failed (likely missing CONVEX_DEPLOYMENT / auth). This is expected on forks. Downstream steps do not require it."
+          fi
+          echo "::endgroup::"
+
+      - name: Typecheck (root tsconfig — excludes convex/)
+        run: npm run typecheck
+
+      - name: Invariants (vitest invariants + verify_invariants.ts)
+        run: npm run check:invariants
+
+      - name: Tests (vitest)
+        run: npm test
+
+      - name: Build (next build)
+        run: npm run build
+
+  # --------------------------------------------------------------------------
+  # Secondary job — typechecks convex/ against convex/tsconfig.json.
+  # Requires `npx convex codegen` to populate convex/_generated/, which needs
+  # Convex auth. Gated on the CONVEX_DEPLOY_KEY secret being available, and
+  # `continue-on-error: true` so it never blocks a PR.
+  #
+  # To enable: add a CONVEX_DEPLOY_KEY repo secret pointing at a dev
+  # deployment (Settings → Secrets and variables → Actions).
+  # --------------------------------------------------------------------------
+  convex-typecheck:
+    name: convex typecheck (optional, requires CONVEX_DEPLOY_KEY)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    timeout-minutes: 10
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check for Convex auth
+        id: check_secret
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          if [ -z "${CONVEX_DEPLOY_KEY:-}" ]; then
+            echo "has_secret=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Convex typecheck skipped::CONVEX_DEPLOY_KEY secret not set. Forks and first-time PRs won't have this; safe to ignore."
+          else
+            echo "has_secret=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run check-convex.sh (codegen + tsc -p convex/tsconfig.json)
+        if: steps.check_secret.outputs.has_secret == 'true'
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: ./scripts/check-convex.sh

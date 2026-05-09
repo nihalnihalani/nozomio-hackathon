@@ -21,7 +21,16 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 
 # Convex
-convex/_generated/
+# `npx convex dev` codegens this directory. We commit hand-written
+# typed stubs (api.d.ts + api.js) as a fallback so a fresh clone with
+# no Convex auth still typechecks and builds — `lib/hooks/useTriage.ts`
+# imports from `@/convex/_generated/api`. We ignore the codegen outputs
+# individually rather than the whole directory so the negations below
+# can re-include the committed fallback stubs (gitignore can't re-include
+# files inside an excluded directory).
+convex/_generated/*
+!convex/_generated/api.d.ts
+!convex/_generated/api.js
 
 # Vercel
 .vercel/

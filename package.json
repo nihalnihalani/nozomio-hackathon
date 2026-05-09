@@ -15,7 +15,8 @@
     "prewarm": "tsx scripts/prewarm_demo.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:invariants": "vitest run tests/invariants && tsx scripts/verify_invariants.ts"
+    "check:invariants": "vitest run tests/invariants && tsx scripts/verify_invariants.ts && tsx scripts/verify_fixtures.ts",
+    "verify:fixtures": "tsx scripts/verify_fixtures.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",

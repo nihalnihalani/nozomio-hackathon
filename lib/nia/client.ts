@@ -68,6 +68,23 @@ function shouldReplay(): boolean {
  * Invariant 1: if you change this function, update
  * tests/invariants/cite_or_die.test.ts to keep parity.
  */
+/**
+ * Normalize source code for comparison: collapse all runs of whitespace
+ * (incl. newlines) into a single space, strip backticks/quotes/escapes,
+ * and lowercase nothing (we want case-sensitive identifier matching).
+ *
+ * The goal is to tolerate the formatting noise Nia sometimes injects
+ * (e.g. line wrapping a long string literal, removing a trailing comma)
+ * while still REQUIRING that the claimed content's substantive structure
+ * appears verbatim in the seed.
+ */
+function normalizeSnippet(s: string): string {
+  return s
+    .replace(/[`"'\\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export async function verifyCodeSnippet(
   snippet: CodeSnippet
 ): Promise<boolean> {
@@ -92,24 +109,50 @@ export async function verifyCodeSnippet(
   const claimed = snippet.content.trim();
   if (!claimed) return false;
 
-  // Compare against the claimed line plus a small window of context.
-  // Nia sometimes returns the line as one chunk that spans 1-3 lines.
-  const window = lines
-    .slice(Math.max(0, idx - 1), Math.min(lines.length, idx + 3))
-    .join("\n");
+  // Compare against the claimed line plus a small window of context in
+  // BOTH directions. Nia sometimes returns the line as one chunk that
+  // spans N lines and the `line` field can refer to anywhere in the
+  // block (start, middle, or end). Widen proportionally to the claim's
+  // line count.
+  const claimedLineCount = claimed.split("\n").length;
+  const windowStart = Math.max(0, idx - claimedLineCount);
+  const windowEnd = Math.min(lines.length, idx + claimedLineCount + 2);
+  const window = lines.slice(windowStart, windowEnd).join("\n");
 
-  // Match heuristic: every "significant" non-whitespace token from the
-  // claim must appear in the window. We tolerate whitespace/quote noise.
-  const tokens = claimed
-    .split(/\s+/)
-    .map((t) => t.replace(/[`'"\\]/g, ""))
-    .filter((t) => t.length >= 4);
+  // Stricter than the prior 60% token-overlap heuristic. Two passes:
+  //
+  //   1. Normalized contiguous-substring match. Collapse whitespace + strip
+  //      quote noise on both sides, then check if the claim is a substring
+  //      of the window. This is what Codex flagged as the correct primary
+  //      check — it requires the claim's structure to actually appear.
+  //   2. Fallback for multi-fragment claims (e.g. Nia returns "a {...} b"
+  //      where the seed has those parts split): require ≥85% of significant
+  //      tokens (length ≥ 4 AND not pure-syntax noise) to appear in the
+  //      window. Tighter than 60%.
+  //
+  // Both passes use the SAME normalization so they don't disagree on
+  // whitespace handling.
+  const normWindow = normalizeSnippet(window);
+  const normClaim = normalizeSnippet(claimed);
+
+  if (normWindow.includes(normClaim)) return true;
+
+  // Substring match failed — fall back to stricter token overlap. This
+  // catches Nia's occasional reflow without surrendering rigor.
+  const SYNTAX_TOKENS = new Set(["return", "const", "function", "async", "await"]);
+  const tokens = normClaim
+    .split(" ")
+    .map((t) => t.replace(/[(){}\[\];,]/g, ""))
+    .filter((t) => t.length >= 4 && !SYNTAX_TOKENS.has(t));
+
   if (tokens.length === 0) {
-    // Trivial content (e.g. `}` or `;`) — accept if windowed text non-empty.
-    return window.trim().length > 0;
+    // Claim is structural-only (braces, semicolons) — too thin to verify.
+    // Reject rather than accept; STRICT mode wins.
+    return false;
   }
-  const hit = tokens.filter((t) => window.includes(t)).length;
-  return hit / tokens.length >= 0.6;
+  const hit = tokens.filter((t) => normWindow.includes(t)).length;
+  // Tightened from 0.60 → 0.85 per Codex finding #4.
+  return hit / tokens.length >= 0.85;
 }
 
 // ─── Client ───────────────────────────────────────────────────────────────────

@@ -57,7 +57,7 @@
           {
             "file": "webhooks/stripe.ts",
             "line": 84,
-            "content": "if (event.retry) {\n  // BUG: missing idempotency check on retry path\n  await processCharge(event);\n}",
+            "content": "if (event.retry) {\n  // BUG: no idempotency check on retry path (charge branch)\n  return processCharge(event);\n}",
             "citation_url": "https://github.com/acme-billing/billing-service/blob/main/webhooks/stripe.ts#L84"
           },
           {
@@ -104,7 +104,7 @@
         {
           "source": "code",
           "source_id": "webhooks/stripe.ts:84",
-          "excerpt": "if (event.retry) {\n  // BUG: missing idempotency check on retry path\n  await processCharge(event);\n}",
+          "excerpt": "if (event.retry) {\n  // BUG: no idempotency check on retry path (charge branch)\n  return processCharge(event);\n}",
           "verified": true
         },
         {
