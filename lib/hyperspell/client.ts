@@ -146,28 +146,39 @@ async function appendReplayWrite(input: AddMemoryInput): Promise<void> {
 
 // ─── Live branches ────────────────────────────────────────────────────────────
 
+// Live response shape per docs.hyperspell.com/api-reference/memories/query-memories.
+// `documents` array carries metadata only — text content is NOT returned by the
+// query endpoint (would require a follow-up `Get Memory` call to hydrate).
+// We surface `title` as the excerpt fallback when no text is available; the
+// demo path is replay so this only matters for live-mode introspection.
 interface LiveSearchResponseRaw {
-  results?: Array<{
-    id?: string;
-    memory_id?: string;
-    text?: string;
-    content?: string;
+  query_id?: string | null;
+  documents?: Array<{
     source?: string;
+    resource_id?: string;
+    title?: string | null;
     metadata?: Record<string, unknown>;
-    score?: number;
+    score?: number | null;
+    folder_id?: string | null;
+    parent_folder_id?: string | null;
   }>;
+  answer?: string | null;
+  errors?: unknown;
 }
 
 async function liveSearch(input: SearchInput): Promise<SearchResult> {
   const apiKey = process.env.HYPERSPELL_API_KEY!;
-  const body = {
+  // Real endpoint: POST /memories/query (no /v1 prefix; no `source_weights`,
+  // no top-level `limit` — use options.max_results). Per-source weighting
+  // is not exposed via this surface; we keep the in-memory weighting on the
+  // replay-fixture hash only.
+  const body: Record<string, unknown> = {
     query: input.query,
     options: {
-      source_weights: input.options?.source_weights ?? DEFAULT_SOURCE_WEIGHTS,
-      limit: input.options?.limit ?? 5,
+      max_results: input.options?.limit ?? 5,
     },
   };
-  const res = await fetch(`${HYPERSPELL_API_BASE}/v1/memories/search`, {
+  const res = await fetch(`${HYPERSPELL_API_BASE}/memories/query`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -176,42 +187,63 @@ async function liveSearch(input: SearchInput): Promise<SearchResult> {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    throw new Error(`hyperspell search ${res.status}: ${await res.text()}`);
+    throw new Error(`hyperspell query ${res.status}: ${await res.text()}`);
   }
   const json = (await res.json()) as LiveSearchResponseRaw;
-  const memories: Memory[] = (json.results ?? []).flatMap((r) => {
-    const id = r.id ?? r.memory_id;
-    const text = r.text ?? r.content;
-    const source = r.source as SourceType | undefined;
-    if (!id || !text || !source) return [];
+  const memories: Memory[] = (json.documents ?? []).flatMap((d) => {
+    const id = d.resource_id;
+    const source = d.source as SourceType | undefined;
+    // The query endpoint does not return text; surface `title` as the
+    // excerpt fallback. If neither is present, drop the result rather
+    // than fabricate (Invariant 1 — Cite-or-Die).
+    const text = d.title ?? "";
+    if (!id || !source || !text) return [];
     const safe = MemorySchema.safeParse({
       id,
       text,
       source,
-      metadata: r.metadata,
-      score: r.score,
+      metadata: d.metadata,
+      score: d.score ?? undefined,
     });
     return safe.success ? [safe.data] : [];
   });
   return { memories };
 }
 
+// Live response shape per docs.hyperspell.com/api-reference/memories/add-a-memory.
+interface LiveAddResponseRaw {
+  source?: string;
+  resource_id?: string;
+  status?: string;
+}
+
 async function liveAdd(input: AddMemoryInput): Promise<{ id: string }> {
   const apiKey = process.env.HYPERSPELL_API_KEY!;
-  const res = await fetch(`${HYPERSPELL_API_BASE}/v1/memories`, {
+  // Real endpoint: POST /memories/add. Body fields: text, resource_id?,
+  // title?, date?, metadata?. There is no top-level `source` field — we
+  // encode it in `metadata.source` so callers (reinforce, ingest) can
+  // still distinguish slack/notion/gmail/triage_history downstream.
+  const body = {
+    text: input.text,
+    metadata: {
+      ...(input.metadata ?? {}),
+      source: input.source,
+    },
+  };
+  const res = await fetch(`${HYPERSPELL_API_BASE}/memories/add`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       authorization: `Bearer ${apiKey}`,
     },
-    body: JSON.stringify(input),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     throw new Error(`hyperspell add ${res.status}: ${await res.text()}`);
   }
-  const json = (await res.json()) as { id?: string; memory_id?: string };
-  const id = json.id ?? json.memory_id;
-  if (!id) throw new Error("hyperspell add: response missing id");
+  const json = (await res.json()) as LiveAddResponseRaw;
+  const id = json.resource_id;
+  if (!id) throw new Error("hyperspell add: response missing resource_id");
   return { id };
 }
 
