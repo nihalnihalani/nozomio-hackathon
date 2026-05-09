@@ -33,6 +33,8 @@ the reinforcement wow moment.
 
 [![Triage architecture](docs/architecture.png)](docs/architecture.png)
 
+*Live mode (`DEMO_MODE=live`) routes through the @convex-dev/agent component; replay mode stays the deterministic demo path.*
+
 ```
                           ┌─────────────────────────────┐
                           │       TRIAGE (agent)        │
@@ -91,7 +93,7 @@ zero API keys. Paste Trace A or Trace B sample buttons in the UI.
 |---|---|
 | `npm run dev` | Next.js dev server |
 | `npm run dev:all` | Next + `npx convex dev` together |
-| `npm test` | Vitest suite (35 tests) |
+| `npm test` | Vitest suite (63 tests) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run check:invariants` | The 6 invariant gates |
 | `npm run build` | Next 15 production build |
@@ -122,7 +124,7 @@ The 4 rules every change must preserve. See `CLAUDE.md` for the rationale,
 
 ```
 Frontend:        Next.js 15.1.12 (App Router) · TypeScript · shadcn/ui · Tailwind
-LLM:             OpenAI gpt-5.5 (reasoning model; reasoning_effort=low)
+LLM:             OpenAI gpt-4o-mini (used by @convex-dev/agent live path) — replay path uses no LLM at all
 Agent runtime:   lib/agent/loop.ts — runs in Next.js (replay/live)
 Backend (hot):   Convex (queries, mutations, actions, scheduler)
 Backend (cold):  InsForge (Postgres + auth + RLS)
@@ -202,18 +204,21 @@ Skills under `.agents/skills/` (symlinked into `.claude/skills/`):
 
 ## Roadmap (post-hackathon)
 
-The current architecture uses Convex as a reactive query layer + mirror
-target; the agent loop is hand-rolled in `lib/agent/loop.ts`. The 2025–26
-Convex `@convex-dev/agent` component would replace ~80% of that loop with
-a managed runtime (threads, tool dispatch, delta streaming, built-in RAG).
+The `@convex-dev/agent` migration is **already done** — PR #8 wired the
+component, PR #10 finished the live path (`useTriage` now calls
+`api.triage.start`, `lib/agent/loop.ts` is on AI SDK v6, and a new
+`produceTriage` Zod tool enforces Cite-Or-Die at the AI SDK boundary),
+and PR #11 corrected the Hyperspell live calls to the real
+`/memories/query` + `/memories/add` endpoints. Live mode is verified
+end-to-end against the real APIs; replay remains the default for the
+public demo URL.
 
-Full migration plan in [`convexplan.md`](./convexplan.md) — 6 sequenced
-phases, ~10 person-hours, deliberately deferred until after the
-hackathon submission to avoid destabilizing the working demo path.
+PostHog LLM Analytics is integrated via `@posthog/convex` —
+`convex/observability.ts` exports AI SDK `gen_ai` spans with per-call
+cost/latency/model traces (no-op without `POSTHOG_API_KEY`).
 
-The plan also covers PostHog LLM Analytics integration via
-`@posthog/convex`, replacing today's `console.log` observability with
-per-call cost/latency/model traces.
+The original migration scoping doc lives in
+[`convexplan.md`](./convexplan.md) for historical reference.
 
 ## Hackathon meta
 

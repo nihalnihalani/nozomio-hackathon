@@ -21,9 +21,9 @@ the deeper rules.
 ## Project state (as of 2026-05-09)
 
 - **MVP:** complete and merged on `main` (PR #1)
-- **Convex integration:** complete (Phases A + C + B all shipped)
+- **Convex integration:** complete THROUGH the @convex-dev/agent component (PR #8/#10/#11 all merged). Both live and replay paths functional.
 - **Production:** live at https://nozomio-hackathon-dun.vercel.app
-- **Tests:** 35 vitest pass, 6 invariant gates green, build clean
+- **Tests:** 63 vitest pass, 6 invariant gates green, build clean
 - **Demo mode:** `DEMO_MODE=replay` is the default — no API keys needed
   to run the canonical Trace A / Trace B flow
 
@@ -91,11 +91,14 @@ slash commands in Claude Code.
   `seed/` and `data/replay/` bundling problem — Convex's sandbox
   doesn't have those files. The current architecture (agent in Next.js,
   UI subscribes to Convex) sidesteps this.
-- **Don't start the `@convex-dev/agent` migration mid-demo.** The full
-  plan is documented in `convexplan.md` (6 phases, ~10h, breaks ~15
-  tests). Useful post-hackathon. Mid-demo it would replace the working
-  agent loop with an unverified path that depends on AI SDK v5 +
-  Anthropic API key (neither currently set up).
+- **Don't change `lib/agent/loop.ts:loadFixtures` to require
+  `fs.readdir` without keeping the bundled-import fallback.** The
+  Convex sandbox doesn't have `data/replay/` on disk — `useTriage`
+  routes ALL runs through Convex actions, so fixtures must be loaded
+  via static JSON imports of `data/replay/trace-{a,b}.json` to bundle
+  into the sandbox. The `@convex-dev/agent` migration itself is
+  already complete (PR #8/#10/#11 merged); this caveat is about
+  preserving the bundling fix.
 
 ## See also
 
