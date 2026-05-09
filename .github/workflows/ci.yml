@@ -1,0 +1,139 @@
+# CI for Triage
+# ----------------------------------------------------------------------------
+# Codex review item: "Make Convex Node-action deployment/codegen a real
+# blocking check for the demo branch."
+#
+# Constraint: `npx convex codegen` requires a deployment that supports Node
+# actions (Node 18/20/22/24, see `.nvmrc` and `convex.json`) and either
+# `CONVEX_DEPLOY_KEY` or an interactive login. Forks and first-time PRs
+# won't have the secret.
+#
+# Strategy:
+#   - Primary `build-and-test` job runs everything that works WITHOUT auth:
+#     typecheck (root tsconfig excludes convex/), invariants, vitest, build.
+#     Convex codegen is best-effort here — it will fail without auth, and
+#     that's expected on forks.
+#   - Secondary `convex-typecheck` job is the REAL Codex-required gate.
+#     It is skipped when `CONVEX_DEPLOY_KEY` is absent (so forks pass), but
+#     when the secret IS present (the project's own CI), codegen failure
+#     fails the job and blocks merge.
+# ----------------------------------------------------------------------------
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref (saves CI minutes on rapid pushes).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Primary job — must pass for merge. Does NOT require Convex auth.
+  # --------------------------------------------------------------------------
+  build-and-test:
+    name: build + test (no convex auth)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node (from .nvmrc)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `convex codegen` needs auth even for offline use. We attempt it and
+      # surface the result as a warning — never block here. The root tsconfig
+      # excludes convex/, so the rest of the pipeline does not depend on
+      # _generated/ being present. The strict check lives in convex-typecheck.
+      - name: Convex codegen (best-effort, may fail without auth)
+        id: convex_codegen
+        continue-on-error: true
+        run: |
+          echo "::group::npx convex codegen"
+          if npx convex codegen --typecheck disable; then
+            echo "codegen_ok=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Convex codegen::OK"
+          else
+            echo "codegen_ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Convex codegen skipped::npx convex codegen failed (likely missing CONVEX_DEPLOYMENT / auth, or unsupported Node version). This is expected on forks. The strict gate runs in the convex-typecheck job."
+          fi
+          echo "::endgroup::"
+
+      - name: Typecheck (root tsconfig — excludes convex/)
+        run: npm run typecheck
+
+      - name: Invariants (vitest invariants + verify_invariants.ts)
+        run: npm run check:invariants
+
+      - name: Tests (vitest)
+        run: npm test
+
+      - name: Build (next build)
+        run: npm run build
+
+  # --------------------------------------------------------------------------
+  # Secondary job — strict gate that typechecks convex/ against
+  # convex/tsconfig.json. Requires `npx convex codegen` to populate
+  # convex/_generated/, which needs Convex auth.
+  #
+  # Behavior:
+  #   - Skipped (early-exit success) when CONVEX_DEPLOY_KEY is absent — so
+  #     forks and first-time PRs without the secret never block.
+  #   - When CONVEX_DEPLOY_KEY IS present (project CI), codegen failure
+  #     FAILS the job. No `continue-on-error` here.
+  #
+  # To enable: add a CONVEX_DEPLOY_KEY repo secret pointing at a Convex
+  # deployment that has Node actions enabled (Settings → Secrets and
+  # variables → Actions). See README §"Convex Node-action deployment".
+  # --------------------------------------------------------------------------
+  convex-typecheck:
+    name: convex typecheck (strict when CONVEX_DEPLOY_KEY is set)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node (from .nvmrc)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check for Convex auth
+        id: check_secret
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          if [ -z "${CONVEX_DEPLOY_KEY:-}" ]; then
+            echo "has_secret=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Convex typecheck skipped::CONVEX_DEPLOY_KEY secret not set. Forks and first-time PRs won't have this; safe to ignore. To enable the strict gate, add the secret in repo Settings."
+          else
+            echo "has_secret=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Strict: when the secret IS set, codegen + typecheck must succeed.
+      # No continue-on-error — this is the Codex-required blocking gate.
+      - name: Run check-convex.sh (codegen + tsc -p convex/tsconfig.json)
+        if: steps.check_secret.outputs.has_secret == 'true'
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: ./scripts/check-convex.sh

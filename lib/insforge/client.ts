@@ -18,6 +18,13 @@ export interface MirrorIncidentInput {
   triageRunId: string;
   trace: string;
   rootCause?: string | null;
+  // Codex pass-3: citations land in audit_log.payload.citations alongside
+  // the incident row. Optional here; the mirror route is the caller that
+  // populates it. The on-the-wire body field is `citations` in the JSON
+  // POST below.
+  citations?: unknown[];
+  // Optional actor identifier for audit_log.actor (per-org user/agent id).
+  actor?: string | null;
 }
 
 export interface MirrorIncidentResult {
@@ -55,6 +62,8 @@ export class InsForgeClient {
           triage_run_id: input.triageRunId,
           trace: input.trace,
           root_cause: input.rootCause ?? null,
+          citations: input.citations ?? [],
+          actor: input.actor ?? null,
         }),
       });
       if (!res.ok) {
