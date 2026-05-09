@@ -1,29 +1,18 @@
 /**
- * Convex-side wrappers for the two agent tools.
+ * Convex V8-runtime mutations for tool calls.
  *
- * These are NOT the AI-SDK `tool()` definitions used inside the agent
- * loop — those live in lib/agent/loop.ts. These are Convex actions that
- * other Convex code (or the dashboard) can invoke directly to:
- *   1. exercise Hyperspell / Nia outside the agent loop (debug, scripts)
- *   2. log tool calls to the toolCalls table for the live trace UI
- *
- * Invariant 1 (Cite-Or-Die): every tool call here returns the same
- * shape as the in-agent tool — citations carry `verified` flags.
- * Invariant 4 (Hermetic Demo Mode): the underlying clients silently
- * fall back to replay if keys are missing.
+ * Tool actions (recallSimilarIncidents, searchCode) live in
+ * convex/toolsNode.ts because their lib/* clients use node:* APIs.
+ * This file holds only the mutation that the actions and the agent
+ * loop call back into to log tool invocations.
  */
 
 import { v } from "convex/values";
-import { action, internalMutation } from "./_generated/server";
-import { internal } from "./_generated/api";
-import { getHyperspell, SOURCE_WEIGHTS } from "../lib/hyperspell/client";
-import { getNia } from "../lib/nia/client";
-
-// ─── Internal logging mutation ────────────────────────────────────────────────
+import { internalMutation } from "./_generated/server";
 
 /**
  * Persist a tool invocation to the toolCalls table. Called by the
- * tool actions below AND by the agent loop in convex/triage.ts.
+ * tool actions in toolsNode.ts AND by the agent loop in triageNode.ts.
  *
  * Internal-only (not exposed to the frontend) because the frontend
  * never directly writes to toolCalls — that would let the UI fake
@@ -49,71 +38,5 @@ export const logToolCall = internalMutation({
       latencyMs: args.latencyMs,
       at: Date.now(),
     });
-  },
-});
-
-// ─── Tool: recallSimilarIncidents ─────────────────────────────────────────────
-
-/**
- * Hyperspell memories.search wrapper.
- * Returns memories with source weighting tuned for SRE incidents.
- * Logs the call against `triageRunId` if provided.
- */
-export const recallSimilarIncidents = action({
-  args: {
-    signature: v.string(),
-    triageRunId: v.optional(v.id("triageRuns")),
-  },
-  handler: async (ctx, args) => {
-    const start = Date.now();
-    const hyperspell = getHyperspell();
-    const result = await hyperspell.memories.search({
-      query: args.signature,
-      options: { source_weights: SOURCE_WEIGHTS, limit: 5 },
-    });
-    const latencyMs = Date.now() - start;
-    if (args.triageRunId) {
-      await ctx.runMutation(internal.tools.logToolCall, {
-        triageRunId: args.triageRunId,
-        tool: "recallSimilarIncidents",
-        input: { signature: args.signature },
-        output: result,
-        latencyMs,
-      });
-    }
-    return result;
-  },
-});
-
-// ─── Tool: searchCode ─────────────────────────────────────────────────────────
-
-/**
- * Nia /v2/search wrapper. Snippets are run through the cite-or-die
- * verifier inside lib/nia/client.ts before being returned (Invariant 1).
- */
-export const searchCode = action({
-  args: {
-    query: v.string(),
-    triageRunId: v.optional(v.id("triageRuns")),
-  },
-  handler: async (ctx, args) => {
-    const start = Date.now();
-    const nia = getNia();
-    const result = await nia.search({
-      query: args.query,
-      mode: "query",
-      include_sources: true,
-    });
-    const latencyMs = Date.now() - start;
-    if (args.triageRunId) {
-      await ctx.runMutation(internal.tools.logToolCall, {
-        triageRunId: args.triageRunId,
-        tool: "searchCode",
-        input: { query: args.query },
-        output: result,
-        latencyMs,
-      });
-    }
-    return result;
   },
 });
