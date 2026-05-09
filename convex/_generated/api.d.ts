@@ -8,8 +8,13 @@
  * @module
  */
 
+import type * as reinforce from "../reinforce.js";
+import type * as reinforceNode from "../reinforceNode.js";
 import type * as test from "../test.js";
 import type * as tools from "../tools.js";
+import type * as toolsNode from "../toolsNode.js";
+import type * as triage from "../triage.js";
+import type * as triageNode from "../triageNode.js";
 
 import type {
   ApiFromModules,
@@ -18,8 +23,13 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  reinforce: typeof reinforce;
+  reinforceNode: typeof reinforceNode;
   test: typeof test;
   tools: typeof tools;
+  toolsNode: typeof toolsNode;
+  triage: typeof triage;
+  triageNode: typeof triageNode;
 }>;
 
 /**

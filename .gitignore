@@ -52,3 +52,4 @@ docs/demo-backup.mp4
 data/replay/hyperspell/_writes.log
 data/replay/hyperspell/_ingest-log.json
 data/replay/hyperspell/.ingest-complete
+.vercel
