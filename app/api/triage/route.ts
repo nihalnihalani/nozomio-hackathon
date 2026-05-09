@@ -23,9 +23,29 @@
 
 import { NextRequest } from "next/server";
 import { z } from "zod";
+import { ConvexHttpClient } from "convex/browser";
 import { runAgent, type AgentEvent } from "@/lib/agent/loop";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 
 export const runtime = "nodejs"; // we read seed/ files for cite-or-die
+
+/**
+ * Mirror writer — best-effort, fire-and-forget Convex writes that
+ * land on the same hot-path tables (triageRuns, toolCalls, citations)
+ * as the in-Convex agent. The SSE path remains the source of truth for
+ * the demo; if Convex is down or NEXT_PUBLIC_CONVEX_URL is unset, the
+ * mirror silently no-ops and the demo still works (Invariant 4).
+ */
+function makeConvexMirror() {
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+  if (!url) return null;
+  try {
+    return new ConvexHttpClient(url);
+  } catch {
+    return null;
+  }
+}
 
 const RequestSchema = z.object({
   trace: z.string().min(1),
@@ -127,6 +147,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { trace, orgId, fixtureHint } = parsed.data;
+  const convex = makeConvexMirror();
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -137,9 +158,108 @@ export async function POST(req: NextRequest) {
           // Stream closed by client — swallow.
         }
       };
+
+      // Best-effort: create the Convex run row up front so the dashboard
+      // and useQuery(api.triage.recentRuns) reflect the run immediately.
+      let triageRunId: Id<"triageRuns"> | null = null;
+      if (convex) {
+        try {
+          triageRunId = await convex.mutation(api.triage.createRun, {
+            orgId,
+            inputTrace: trace,
+          });
+          enqueue({
+            event: "run_started",
+            data: { triageRunId },
+          });
+          await convex.mutation(api.triage.setStatus, {
+            triageRunId,
+            status: "running",
+          });
+        } catch (err) {
+          console.warn("[mirror] convex createRun failed:", err);
+        }
+      }
+
+      // Fire-and-forget: never let mirror failures block the SSE stream.
+      const mirror = (fn: () => Promise<unknown>) => {
+        fn().catch((err) =>
+          console.warn("[mirror] convex write failed (non-fatal):", err)
+        );
+      };
+
       const sink = (event: AgentEvent) => {
         for (const f of toSseFrames(event)) enqueue(f);
+
+        // Mirror to Convex hot-path tables when we have a run id.
+        if (!convex || !triageRunId) return;
+        const id = triageRunId;
+
+        if (event.type === "tool_call") {
+          mirror(() =>
+            convex.mutation(api.tools.logToolCall, {
+              triageRunId: id,
+              tool: event.tool,
+              input: event.input,
+              output: event.output,
+              latencyMs: event.latencyMs,
+            })
+          );
+        } else if (event.type === "citation") {
+          mirror(() =>
+            convex.mutation(api.triage.insertCitation, {
+              triageRunId: id,
+              source: event.citation.source,
+              sourceId: event.citation.source_id,
+              excerpt: event.citation.excerpt,
+              metadata: event.citation.metadata ?? {},
+              verified: event.citation.verified,
+            })
+          );
+        } else if (event.type === "result") {
+          // Mirror keeps source_ids as the citation pointer strings
+          // (the Convex-hosted run path stores actual citation _ids
+          // — this small divergence is acceptable for the dashboard view).
+          mirror(() =>
+            convex.mutation(api.triage.finalizeResult, {
+              triageRunId: id,
+              timeline: event.result.timeline,
+              rootCause: {
+                text: event.result.root_cause.text,
+                citations: event.result.root_cause.citations.map(
+                  (c) => c.source_id
+                ),
+              },
+              suspectedFix: {
+                file: event.result.suspected_fix.file,
+                line: event.result.suspected_fix.line,
+                diff: event.result.suspected_fix.diff,
+                citations: event.result.suspected_fix.citations.map(
+                  (c) => c.source_id
+                ),
+              },
+              similarIncidents: event.result.similar_incidents.map(
+                (s) => s.memory_id
+              ),
+            })
+          );
+          mirror(() =>
+            convex.mutation(api.triage.setStatus, {
+              triageRunId: id,
+              status: "done",
+            })
+          );
+        } else if (event.type === "error") {
+          mirror(() =>
+            convex.mutation(api.triage.setStatus, {
+              triageRunId: id,
+              status: "error",
+              errorMessage: event.message,
+            })
+          );
+        }
       };
+
       try {
         await runAgent({ trace, orgId, fixtureHint }, sink);
       } catch (err) {

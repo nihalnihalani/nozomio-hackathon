@@ -5,6 +5,7 @@ import { GitBranch, RefreshCw, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ArchitectureSlide } from "@/components/ArchitectureSlide";
 import { CitationDrawer } from "@/components/CitationDrawer";
+import { ConvexLiveActivity } from "@/components/ConvexLiveActivity";
 import { DemoModeBadge } from "@/components/DemoModeBadge";
 import {
   PasteTraceInput,
@@ -296,6 +297,8 @@ export default function HomePage() {
             )}
           </section>
         )}
+
+        <ConvexLiveActivity />
       </div>
 
       <CitationDrawer

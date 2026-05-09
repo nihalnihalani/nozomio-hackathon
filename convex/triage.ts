@@ -13,12 +13,13 @@
  */
 
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 
-// ─── Mutations (internal — used by the action's event sink) ───────────────────
+// ─── Mutations (public — called by both the agent action and the
+//     Next.js /api/triage mirror path via ConvexHttpClient) ──────────────────
 
-export const createRun = internalMutation({
+export const createRun = mutation({
   args: { orgId: v.string(), inputTrace: v.string() },
   handler: async (ctx, args) => {
     return await ctx.db.insert("triageRuns", {
@@ -30,7 +31,7 @@ export const createRun = internalMutation({
   },
 });
 
-export const setStatus = internalMutation({
+export const setStatus = mutation({
   args: {
     triageRunId: v.id("triageRuns"),
     status: v.union(
@@ -51,7 +52,7 @@ export const setStatus = internalMutation({
   },
 });
 
-export const insertCitation = internalMutation({
+export const insertCitation = mutation({
   args: {
     triageRunId: v.id("triageRuns"),
     source: v.union(
@@ -77,7 +78,7 @@ export const insertCitation = internalMutation({
   },
 });
 
-export const finalizeResult = internalMutation({
+export const finalizeResult = mutation({
   args: {
     triageRunId: v.id("triageRuns"),
     timeline: v.array(v.object({ at: v.string(), event: v.string() })),

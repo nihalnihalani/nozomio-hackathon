@@ -11,7 +11,7 @@
 
 import { v } from "convex/values";
 import { action } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api } from "./_generated/api";
 import { getHyperspell, SOURCE_WEIGHTS } from "../lib/hyperspell/client";
 import { getNia } from "../lib/nia/client";
 
@@ -34,7 +34,7 @@ export const recallSimilarIncidents = action({
     });
     const latencyMs = Date.now() - start;
     if (args.triageRunId) {
-      await ctx.runMutation(internal.tools.logToolCall, {
+      await ctx.runMutation(api.tools.logToolCall, {
         triageRunId: args.triageRunId,
         tool: "recallSimilarIncidents",
         input: { signature: args.signature },
@@ -65,7 +65,7 @@ export const searchCode = action({
     });
     const latencyMs = Date.now() - start;
     if (args.triageRunId) {
-      await ctx.runMutation(internal.tools.logToolCall, {
+      await ctx.runMutation(api.tools.logToolCall, {
         triageRunId: args.triageRunId,
         tool: "searchCode",
         input: { query: args.query },

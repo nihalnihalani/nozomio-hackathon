@@ -28,7 +28,7 @@ import { getInsForge } from "../lib/insforge/client";
 export const run = action({
   args: { orgId: v.string(), trace: v.string() },
   handler: async (ctx, args): Promise<{ triageRunId: Id<"triageRuns"> }> => {
-    const triageRunId = (await ctx.runMutation(internal.triage.createRun, {
+    const triageRunId = (await ctx.runMutation(api.triage.createRun, {
       orgId: args.orgId,
       inputTrace: args.trace,
     })) as Id<"triageRuns">;
@@ -60,12 +60,12 @@ export const runInternal = internalAction({
 
     const sink = async (event: AgentEvent) => {
       if (event.type === "status") {
-        await ctx.runMutation(internal.triage.setStatus, {
+        await ctx.runMutation(api.triage.setStatus, {
           triageRunId: args.triageRunId,
           status: event.status,
         });
       } else if (event.type === "tool_call") {
-        await ctx.runMutation(internal.tools.logToolCall, {
+        await ctx.runMutation(api.tools.logToolCall, {
           triageRunId: args.triageRunId,
           tool: event.tool,
           input: event.input,
@@ -74,7 +74,7 @@ export const runInternal = internalAction({
         });
       } else if (event.type === "citation") {
         if (!citationIdBySourceId.has(event.citation.source_id)) {
-          const id = (await ctx.runMutation(internal.triage.insertCitation, {
+          const id = (await ctx.runMutation(api.triage.insertCitation, {
             triageRunId: args.triageRunId,
             source: event.citation.source,
             sourceId: event.citation.source_id,
@@ -90,7 +90,7 @@ export const runInternal = internalAction({
             .map((c) => citationIdBySourceId.get(c.source_id))
             .filter((id): id is string => Boolean(id));
 
-        await ctx.runMutation(internal.triage.finalizeResult, {
+        await ctx.runMutation(api.triage.finalizeResult, {
           triageRunId: args.triageRunId,
           timeline: event.result.timeline,
           rootCause: {
@@ -108,7 +108,7 @@ export const runInternal = internalAction({
           ),
         });
       } else if (event.type === "error") {
-        await ctx.runMutation(internal.triage.setStatus, {
+        await ctx.runMutation(api.triage.setStatus, {
           triageRunId: args.triageRunId,
           status: "error",
           errorMessage: event.message,

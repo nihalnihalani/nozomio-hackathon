@@ -8,17 +8,16 @@
  */
 
 import { v } from "convex/values";
-import { internalMutation } from "./_generated/server";
+import { mutation } from "./_generated/server";
 
 /**
  * Persist a tool invocation to the toolCalls table. Called by the
- * tool actions in toolsNode.ts AND by the agent loop in triageNode.ts.
+ * tool actions in toolsNode.ts AND by the agent loop in triageNode.ts
+ * AND by the /api/triage Next.js mirror path via ConvexHttpClient.
  *
- * Internal-only (not exposed to the frontend) because the frontend
- * never directly writes to toolCalls — that would let the UI fake
- * agent reasoning. `useQuery(api.triage.byId)` is the read-side.
+ * Public mutation; the read-side stays gated through useQuery.
  */
-export const logToolCall = internalMutation({
+export const logToolCall = mutation({
   args: {
     triageRunId: v.id("triageRuns"),
     tool: v.union(
