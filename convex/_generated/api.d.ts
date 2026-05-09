@@ -8,6 +8,9 @@
  * @module
  */
 
+import type * as http from "../http.js";
+import type * as insforgeMirror from "../insforgeMirror.js";
+import type * as observability from "../observability.js";
 import type * as reinforce from "../reinforce.js";
 import type * as reinforceNode from "../reinforceNode.js";
 import type * as test from "../test.js";
@@ -25,6 +28,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  http: typeof http;
+  insforgeMirror: typeof insforgeMirror;
+  observability: typeof observability;
   reinforce: typeof reinforce;
   reinforceNode: typeof reinforceNode;
   test: typeof test;
@@ -62,11 +68,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-/**
- * Components registry. Until `npx convex dev` regenerates this file
- * locally, we type `components` loosely so `components.agent` (registered
- * in `convex/convex.config.ts`) typechecks. Live codegen will overwrite
- * this with a precise type.
- */
-import type { AnyApi } from "convex/server";
-export declare const components: AnyApi;
+export declare const components: {
+  agent: import("@convex-dev/agent/_generated/component.js").ComponentApi<"agent">;
+};
