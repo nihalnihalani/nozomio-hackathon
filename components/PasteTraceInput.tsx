@@ -6,17 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-export const SAMPLE_TRACE_A = `Error: Duplicate charge processed for customer cus_abc123
-  at processWebhook (webhooks/stripe.ts:84)
-  at /server.js:212
-  Sentry event: a3f8e9c1
-  Timestamp: 2024-05-09T03:47:12Z`;
-
-export const SAMPLE_TRACE_B = `Error: Duplicate refund event for charge ch_def456
-  at processWebhook (webhooks/stripe.ts:91)
-  at /server.js:212
-  Sentry event: b9d2c4e0
-  Timestamp: 2024-05-09T03:48:34Z`;
+export const SAMPLE_TRACE_A = ``;
+export const SAMPLE_TRACE_B = ``;
 
 interface PasteTraceInputProps {
   onSubmit: (args: { trace: string }) => void;
@@ -63,34 +54,7 @@ export function PasteTraceInput({
         spellCheck={false}
         aria-label="Stack trace input"
       />
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xs uppercase tracking-wider text-muted-foreground">
-            Or use a sample:
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={disabled}
-            onClick={() => handleSample(SAMPLE_TRACE_A)}
-            className="font-mono"
-          >
-            <AlertTriangle className="h-3.5 w-3.5" />
-            Trace A
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={disabled}
-            onClick={() => handleSample(SAMPLE_TRACE_B)}
-            className="font-mono"
-          >
-            <AlertTriangle className="h-3.5 w-3.5" />
-            Trace B
-          </Button>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <Button
           type="button"
           onClick={handleSubmit}
