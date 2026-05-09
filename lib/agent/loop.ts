@@ -88,8 +88,32 @@ async function loadPrompt(): Promise<string> {
   }
 }
 
+// Static JSON imports — bundled at build time so the fixtures are
+// available in BOTH the Next.js runtime AND the Convex sandbox (which
+// only bundles the convex/ folder + transitively imported modules,
+// NOT the on-disk data/replay/ directory).
+//
+// Without this, the Convex action's runReplay path fails with
+// "doesn't match any known fixture" — fs.readdir(REPLAY_DIR) returns
+// an empty array in Convex's sandbox. PR #10 surfaced this regression
+// because the new useTriage routes ALL runs through Convex actions.
+import traceAFixture from "../../data/replay/trace-a.json";
+import traceBFixture from "../../data/replay/trace-b.json";
+
+const BUNDLED_FIXTURES: unknown[] = [traceAFixture, traceBFixture];
+
 async function loadFixtures(): Promise<ReplayFixture[]> {
   const out: ReplayFixture[] = [];
+
+  // Source 1: bundled JSON imports — works in Next.js + Convex sandbox.
+  for (const raw of BUNDLED_FIXTURES) {
+    const parsed = ReplayFixtureSchema.safeParse(raw);
+    if (parsed.success) out.push(parsed.data);
+  }
+  if (out.length > 0) return out;
+
+  // Source 2 (legacy fallback): fs.readdir on data/replay/. Reachable
+  // only if every bundled import failed validation.
   let entries: string[];
   try {
     entries = await fs.readdir(REPLAY_DIR);
@@ -99,7 +123,6 @@ async function loadFixtures(): Promise<ReplayFixture[]> {
   for (const name of entries) {
     if (!name.endsWith(".json")) continue;
     if (name.startsWith("_")) continue;
-    // Skip subdirectory fixtures (data/replay/hyperspell, data/replay/nia)
     const full = path.join(REPLAY_DIR, name);
     try {
       const stat = await fs.stat(full);
@@ -108,7 +131,7 @@ async function loadFixtures(): Promise<ReplayFixture[]> {
       const parsed = ReplayFixtureSchema.safeParse(JSON.parse(raw));
       if (parsed.success) out.push(parsed.data);
     } catch {
-      // Ignore malformed fixtures — they'll surface as a missing match.
+      // Ignore malformed fixtures.
     }
   }
   return out;
