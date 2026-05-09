@@ -48,11 +48,38 @@ export type AgentEvent =
 
 export type EventSink = (event: AgentEvent) => void | Promise<void>;
 
+/**
+ * Probe for "did Trace A run recently for this orgId?".
+ *
+ * The Convex action passes a probe that calls
+ * `internal.traceState.hasRecentTraceA` (which reads `memoryEvents`).
+ * The Next.js SSE route passes a probe backed by a `ConvexHttpClient`
+ * when `NEXT_PUBLIC_CONVEX_URL` is set. Both paths therefore consult the
+ * same source of truth — the reinforcement audit log on disk in Convex.
+ *
+ * Return values:
+ *   - `true`  → at least one recent Trace A memoryEvent for orgId.
+ *   - `false` → checked successfully, no such event.
+ *   - `null`  → couldn't reach Convex (or no probe wired). The loop
+ *               falls back to the in-process Map below. This preserves
+ *               the no-Convex hermetic demo path (Invariant 4).
+ */
+export type TraceStateProbe = (
+  orgId: string,
+  withinMs: number
+) => Promise<boolean | null>;
+
 export interface RunAgentInput {
   trace: string;
   orgId: string;
   /** Optional tag — used by tests / scripts to pin a specific fixture. */
   fixtureHint?: string;
+  /**
+   * Optional probe for the shared Trace-A-ran-recently signal. If absent
+   * or returns `null`, the loop falls back to the module-local Map.
+   * Wired by Convex action and Next.js API route — see TraceStateProbe.
+   */
+  hasRecentTraceA?: TraceStateProbe;
 }
 
 // ─── Replay fixture ───────────────────────────────────────────────────────────
@@ -162,9 +189,20 @@ export function* extractCitations(result: TriageResult): Iterable<Citation> {
 // this — without a prior Trace A run, those citations are stripped from the
 // response so the demo doesn't claim memory was reinforced when it wasn't.
 //
-// Module-level state is acceptable here because the Next.js dev/prod server
-// is a single Node process. In a multi-instance deploy this would need to
-// move to a shared store (Redis, Convex memoryEvents); flagged as Layer-2.
+// SOURCE OF TRUTH (preferred): the `memoryEvents` table written by
+// `convex/reinforce.ts`. The Convex query `internal.traceState.hasRecentTraceA`
+// reads it; both runtime paths (the Convex action and the Next.js SSE
+// fallback) consult that query through the `hasRecentTraceA` probe on
+// `RunAgentInput`. See `convex/traceState.ts` for the heuristic that
+// distinguishes a Trace A row from a Trace B row purely from
+// `reinforcedMemoryIds`.
+//
+// FALLBACK (hermetic demo, no Convex): when no probe is wired (or the
+// probe returns `null` because Convex is unreachable / unconfigured),
+// we fall back to this module-local Map. Both stores agree on semantics:
+// "there's been a Trace A run within TRACE_A_RUN_TTL_MS for this orgId."
+// The Map is intentionally retained so a fresh clone with no Convex
+// auth still demonstrates the gating behavior end-to-end.
 const TRACE_A_RUN_STATE = new Map<
   string,
   { traceASignature: string; at: number }
@@ -197,6 +235,33 @@ function hasTraceARunRecently(orgId: string): boolean {
   const entry = TRACE_A_RUN_STATE.get(orgId);
   if (!entry) return false;
   return Date.now() - entry.at < TRACE_A_RUN_TTL_MS;
+}
+
+/**
+ * Resolve "did Trace A run for this orgId recently?" by consulting the
+ * Convex `memoryEvents`-backed probe first and falling back to the
+ * in-process Map when the probe is absent or returns null.
+ */
+async function checkTraceARecently(input: RunAgentInput): Promise<boolean> {
+  if (input.hasRecentTraceA) {
+    try {
+      const remote = await input.hasRecentTraceA(
+        input.orgId,
+        TRACE_A_RUN_TTL_MS
+      );
+      if (remote === true) return true;
+      if (remote === false) {
+        // Definitive "no" from Convex. Don't shadow it with the local Map —
+        // shared truth wins. (If the same Node process previously ran a
+        // Trace A but Convex says no event was persisted, we trust Convex.)
+        return false;
+      }
+      // remote === null → fall through to local Map.
+    } catch {
+      // Probe threw → fall through to local Map.
+    }
+  }
+  return hasTraceARunRecently(input.orgId);
 }
 
 /**
@@ -270,8 +335,13 @@ async function runReplay(
   // DM + reinforcement trail) and surface a status event explaining why.
   // This makes the dependency between the two traces honest rather than
   // theatrical: the wow moment ONLY fires after Trace A has actually run.
+  //
+  // Preferred check: the Convex `memoryEvents`-backed probe. Falls back to
+  // the in-process Map only when the probe is absent or returns null
+  // (meaning Convex is unconfigured or unreachable). Both stores share
+  // the same "recent Trace A for this orgId" semantics.
   const isTraceA = isTraceAFixture(fixture);
-  const traceAValid = hasTraceARunRecently(input.orgId);
+  const traceAValid = await checkTraceARecently(input);
   const degradeReinforcement = !isTraceA && !traceAValid;
 
   await emit({ type: "status", status: "running" });
@@ -345,6 +415,17 @@ async function runReplay(
 
   // Record the Trace A run so a subsequent Trace B can surface the
   // reinforced memory honestly.
+  //
+  // The CANONICAL marker is the `memoryEvents` row that
+  // `convex/reinforce.ts:reinforce` writes after this triage run finishes
+  // (see `convex/triage.ts:runInternal`). The Convex action path therefore
+  // doesn't need anything extra here — the next run picks it up via the
+  // `hasRecentTraceA` probe.
+  //
+  // The local Map below remains the FALLBACK for the no-Convex SSE-only
+  // demo path (Invariant 4): the API route in `app/api/triage/route.ts`
+  // does not write to memoryEvents, so without this in-process record,
+  // a follow-up Trace B in the same Node process would see no Trace A.
   if (isTraceA) {
     recordTraceARun(input.orgId, fixture.input_trace_pattern);
   }

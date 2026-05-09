@@ -23,16 +23,60 @@
 
 import { NextRequest } from "next/server";
 import { z } from "zod";
-import { runAgent, type AgentEvent } from "@/lib/agent/loop";
+import { ConvexHttpClient } from "convex/browser";
+import {
+  runAgent,
+  type AgentEvent,
+  type TraceStateProbe,
+} from "@/lib/agent/loop";
+import { internal } from "@/convex/_generated/api";
 
 export const runtime = "nodejs"; // we read seed/ files for cite-or-die
+
+/**
+ * Build a Trace-A-state probe backed by a `ConvexHttpClient`.
+ *
+ * Codex finding #3: the agent loop's gating decision must come from a
+ * shared store (the canonical `memoryEvents` table), not a process-local
+ * Map. When `NEXT_PUBLIC_CONVEX_URL` is set, the probe queries Convex
+ * directly so this Next.js route and the Convex action consult the same
+ * source of truth. When the env var is absent (the hermetic SSE-only
+ * demo path), we return `undefined` so the loop falls back to its
+ * in-process Map — preserving Invariant 4 (Hermetic Demo Mode).
+ */
+function buildTraceStateProbe(): TraceStateProbe | undefined {
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+  if (!url) return undefined;
+  let client: ConvexHttpClient;
+  try {
+    client = new ConvexHttpClient(url);
+  } catch {
+    return undefined;
+  }
+  return async (orgId, withinMs) => {
+    try {
+      // The fallback `convex/_generated/api` stub types `internal` as
+      // `AnyApi`, which makes its members untyped. The real codegen
+      // overwrites this with precise types. Either way, the runtime
+      // reference resolves to the `internal.traceState.hasRecentTraceA`
+      // FunctionReference. Cast through `any` so the build works against
+      // both the stub and the regenerated typings.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ref = (internal as any).traceState.hasRecentTraceA;
+      const result = (await client.query(ref, { orgId, withinMs })) as boolean;
+      return result;
+    } catch {
+      // Network / auth blip → tell the caller "I don't know" so it falls
+      // back to the local Map rather than incorrectly reporting "no Trace A."
+      return null;
+    }
+  };
+}
 
 const RequestSchema = z.object({
   trace: z.string().min(1),
   orgId: z.string().min(1).default("demo-org"),
   fixtureHint: z.string().optional(),
-  /** Optional client-side run id for correlation with the UI store. */
-  clientRunId: z.string().optional(),
 });
 
 interface SseFrame {
@@ -45,6 +89,14 @@ function encodeFrame(frame: SseFrame): Uint8Array {
   return new TextEncoder().encode(payload);
 }
 
+// Monotonic per-route counter for tool_call IDs. Two same-tool same-millisecond
+// calls would otherwise produce colliding IDs (Codex finding). The counter
+// resets per server process — the IDs only need to be unique within a session.
+let _toolCallSeq = 0;
+function nextToolCallSeq(): number {
+  return ++_toolCallSeq;
+}
+
 /**
  * Map an AgentEvent into one or more SSE frames matching the frontend's
  * useTriage hook contract.
@@ -53,15 +105,19 @@ function toSseFrames(event: AgentEvent): SseFrame[] {
   switch (event.type) {
     case "status":
       return [{ event: "status", data: { status: event.status } }];
-    case "tool_call":
+    case "tool_call": {
       // Frontend expects start+done as separate events. We collapse
       // both at the same instant since lib/agent/loop runs the tool
       // synchronously before emitting.
+      // Codex finding: same-millisecond same-tool calls collide on
+      // `${tool}-${at}`. Add a per-route monotonic counter so two
+      // recallSimilarIncidents calls in the same ms get distinct IDs.
+      const callId = `${event.tool}-${event.at}-${nextToolCallSeq()}`;
       return [
         {
           event: "tool_call_start",
           data: {
-            id: `${event.tool}-${event.at}`,
+            id: callId,
             tool: event.tool,
             input: event.input,
             at: event.at,
@@ -70,13 +126,14 @@ function toSseFrames(event: AgentEvent): SseFrame[] {
         {
           event: "tool_call_done",
           data: {
-            id: `${event.tool}-${event.at}`,
+            id: callId,
             output: event.output,
             latencyMs: event.latencyMs,
             resultCount: countResults(event.tool, event.output),
           },
         },
       ];
+    }
     case "citation":
       return [{ event: "citation", data: event.citation }];
     case "result":
@@ -127,6 +184,9 @@ export async function POST(req: NextRequest) {
   }
 
   const { trace, orgId, fixtureHint } = parsed.data;
+  // Built once per request; the probe is cheap and the client holds no
+  // long-lived state we'd want to reuse across requests.
+  const hasRecentTraceA = buildTraceStateProbe();
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -141,7 +201,10 @@ export async function POST(req: NextRequest) {
         for (const f of toSseFrames(event)) enqueue(f);
       };
       try {
-        await runAgent({ trace, orgId, fixtureHint }, sink);
+        await runAgent(
+          { trace, orgId, fixtureHint, hasRecentTraceA },
+          sink
+        );
       } catch (err) {
         enqueue({ event: "error", data: { message: (err as Error).message } });
       }

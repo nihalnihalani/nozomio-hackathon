@@ -109,50 +109,51 @@ export async function verifyCodeSnippet(
   const claimed = snippet.content.trim();
   if (!claimed) return false;
 
-  // Compare against the claimed line plus a small window of context in
-  // BOTH directions. Nia sometimes returns the line as one chunk that
-  // spans N lines and the `line` field can refer to anywhere in the
-  // block (start, middle, or end). Widen proportionally to the claim's
-  // line count.
-  const claimedLineCount = claimed.split("\n").length;
-  const windowStart = Math.max(0, idx - claimedLineCount);
-  const windowEnd = Math.min(lines.length, idx + claimedLineCount + 2);
-  const window = lines.slice(windowStart, windowEnd).join("\n");
-
-  // Stricter than the prior 60% token-overlap heuristic. Two passes:
+  // Codex finding (pass 2): the previous window-based verifier accepted
+  // claims whose content came from a NEARBY line. The fix: anchor at the
+  // claimed line strictly, then scan forward through the seed for the
+  // claim's remaining lines (allowing comment/blank lines to be skipped
+  // — Nia sometimes returns the bug block without intervening commentary).
   //
-  //   1. Normalized contiguous-substring match. Collapse whitespace + strip
-  //      quote noise on both sides, then check if the claim is a substring
-  //      of the window. This is what Codex flagged as the correct primary
-  //      check — it requires the claim's structure to actually appear.
-  //   2. Fallback for multi-fragment claims (e.g. Nia returns "a {...} b"
-  //      where the seed has those parts split): require ≥85% of significant
-  //      tokens (length ≥ 4 AND not pure-syntax noise) to appear in the
-  //      window. Tighter than 60%.
-  //
-  // Both passes use the SAME normalization so they don't disagree on
-  // whitespace handling.
-  const normWindow = normalizeSnippet(window);
-  const normClaim = normalizeSnippet(claimed);
+  // The combination of "first-line strict anchor" + "subsequent-lines
+  // scan-forward with bounded lookahead" rejects fabricated file:line
+  // claims (Codex's false positive) AND tolerates Nia's occasional
+  // comment-omitted reflow (Codex's false negative).
+  const claimLines = claimed
+    .split("\n")
+    .map((l) => normalizeSnippet(l))
+    .filter((l) => l.length > 0);
+  if (claimLines.length === 0) return false;
 
-  if (normWindow.includes(normClaim)) return true;
-
-  // Substring match failed — fall back to stricter token overlap. This
-  // catches Nia's occasional reflow without surrendering rigor.
-  const SYNTAX_TOKENS = new Set(["return", "const", "function", "async", "await"]);
-  const tokens = normClaim
-    .split(" ")
-    .map((t) => t.replace(/[(){}\[\];,]/g, ""))
-    .filter((t) => t.length >= 4 && !SYNTAX_TOKENS.has(t));
-
-  if (tokens.length === 0) {
-    // Claim is structural-only (braces, semicolons) — too thin to verify.
-    // Reject rather than accept; STRICT mode wins.
+  // Anchor check (strict): claim's first significant line MUST be
+  // contained in seed[idx] after normalization. Reject anything else.
+  const normFirstSeed = normalizeSnippet(lines[idx] ?? "");
+  if (!normFirstSeed.includes(claimLines[0])) {
     return false;
   }
-  const hit = tokens.filter((t) => normWindow.includes(t)).length;
-  // Tightened from 0.60 → 0.85 per Codex finding #4.
-  return hit / tokens.length >= 0.85;
+
+  // Multi-line scan-forward: each subsequent claim line must appear in a
+  // seed line within `LOOKAHEAD` lines of where we left off. The lookahead
+  // tolerates Nia compressing a block by skipping comments / blank lines.
+  // Bounded so the verifier can't accept claims that drift arbitrarily far.
+  const LOOKAHEAD = 3;
+  let seedCursor = idx + 1;
+  for (let i = 1; i < claimLines.length; i++) {
+    const claim = claimLines[i];
+    let found = false;
+    const stop = Math.min(lines.length, seedCursor + LOOKAHEAD + 1);
+    for (let j = seedCursor; j < stop; j++) {
+      const normSeedLine = normalizeSnippet(lines[j] ?? "");
+      if (normSeedLine.includes(claim)) {
+        seedCursor = j + 1;
+        found = true;
+        break;
+      }
+    }
+    if (!found) return false;
+  }
+
+  return true;
 }
 
 // ─── Client ───────────────────────────────────────────────────────────────────

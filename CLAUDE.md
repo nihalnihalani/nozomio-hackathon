@@ -58,7 +58,7 @@
 
 A **3-person team** drives a **5-stage agent loop** that maps an incident input (stack trace / Sentry webhook) onto a cited triage with reinforcement-learned memory.
 
-- **Convex Agent runtime** (`@convex-dev/agent`) — agent loop, threads, tool calling, persistent state
+- **Convex** (hot path) — schema + reactive queries + scheduled actions for the live trace. The agent loop runs server-side as a Convex Node-runtime action (`convex/triage_node.ts`), not via `@convex-dev/agent`. Adopting the agent component is a Layer 2 upgrade; the current path keeps `useQuery(api.triage.byId)` as the "live agent thinking" surface.
 - **Hyperspell** — multi-source memory across Slack #incidents + Notion postmortems + Gmail vendor outages; `recallSimilarIncidents` tool with weighted source scoring; reinforcement step after each triage
 - **Nia** — code-aware monorepo + ADR + runbook indexing; `searchCode` tool; cite-or-die verifier checks `file:line` actually contains claimed code
 - **InsForge** — multi-tenant Postgres + auth (prebuilt magic-link React component) + RLS by `org_id`; mirrors every triage to `incidents` + `audit_log` tables
@@ -218,8 +218,9 @@ Don't pre-create empty folders. Scaffold each phase as needed.
 **Live OAuth on stage = death.** All Hyperspell data is pre-ingested via `scripts/ingest.ts` before stage call. All Nia indexing on the `seed/billing-service/` repo is pre-warmed. The "agent thinking" stream renders from real Convex tool calls — not mocks — but every external dependency must have a hermetic fallback.
 
 **Rules:**
-- `DEMO_MODE` env: `live` (real Hyperspell + Nia calls), `replay` (cached responses from `data/replay/{traceRunId}/`), `hybrid` (live with per-stage timeout, falls back to replay).
-- Every outbound call (Hyperspell, Nia, Anthropic) must have a `DEMO_MODE=replay` branch and a test in `tests/invariants/replay_mode.test.ts` proving it.
+- `DEMO_MODE` env: `live` (production default — real Hyperspell + Nia + Anthropic + InsForge calls; missing keys silently degrade per-client), `replay` (opt-in: cached responses from `data/replay/{traceRunId}/`, used for hermetic tests and offline dev), `hybrid` (live with per-stage timeout, falls back to replay).
+- Default when `DEMO_MODE` is unset = `live`. Set `DEMO_MODE=replay` explicitly for hermetic dev/test runs and the wifi-dies hedge.
+- Every outbound call (Hyperspell, Nia, Anthropic, InsForge) must have a `DEMO_MODE=replay` branch and a test in `tests/invariants/replay_mode.test.ts` proving it.
 - `scripts/prewarm_demo.ts` seeds the replay cache the night before for Trace A + Trace B + 1 backup.
 - **Hard rule:** never run `DEMO_MODE=live` for the first time on stage. Pre-warm + dry-run the night before.
 - **Backup video by H4:30** (1 hour before the deadline): record `docs/demo-backup.mp4` showing the same 90-second beats. **Always.** This is the wifi-died hedge. PR with it must merge before stage call.
@@ -234,7 +235,7 @@ Don't pre-create empty folders. Scaffold each phase as needed.
 - **3-person parallel build, not 1-2.** Roles are Agent Engineer (Convex + tools), Product Engineer (Next.js + InsForge auth + UI), Storyteller (seed data + booth + demo). See PLAN.md §7.
 - **5 hours wall-clock, not 12.** Cuts from the 12h plan that come back if time allows: real GitHub PR creation, real Slack `chat.postMessage`, real Sentry webhook ingest, Vercel Workflow DevKit. Stage them as Layer-2 only after the core demo works end-to-end.
 - **No mocks on the demo path.** Real Convex actions, real Hyperspell calls (or replay), real Nia citations, real InsForge mirror. Mocks are only for offline dev.
-- **Convex Agent component over raw API routes.** `@convex-dev/agent` provides threads + tool calling + reactive UI for free. PRs that bypass the Agent component for "just one route" don't merge — they kill the Convex prize candidacy.
+- **Convex actions + reactive `useQuery`, not a separate API server.** The agent loop runs as a Convex Node-runtime action (`convex/triage_node.ts`); `useQuery(api.triage.byId)` provides the "live agent thinking" reactivity. Adopting `@convex-dev/agent` for managed threads/tool-calling/UI is a Layer-2 upgrade; the current path is intentionally simpler so the demo ships in 5 hours.
 - **Magic-link auth, not OAuth flows on stage.** InsForge's prebuilt React component is 1-click. Saves 30 minutes vs DIY auth.
 - **Bounded narration in the agent.** The system prompt restricts the agent to citing data it actually retrieved. PRs that loosen the bound (e.g., "let the agent fall back to general knowledge") don't merge — Cite-Or-Die is non-negotiable.
 - **No `gh pr create` in the demo path.** Render the proposed fix as a diff in the UI. Real GitHub PR creation is Layer 2.
@@ -262,8 +263,8 @@ STACK TRACE INPUT (or Sentry webhook)
                                         Cite-or-die verifier: claimed file:line must
                                         contain claimed code; else drop citation
                 ▼
-   Stage 4 — Compose (Convex Agent)    @convex-dev/agent runs Claude Sonnet
-                                        with stopWhen: stepCountIs(5)
+   Stage 4 — Compose (Convex action)   convex/triage_node.ts runs Claude Sonnet
+                                        via the AI SDK with stopWhen: stepCountIs(5)
                                         Streams toolCalls + citations to Convex tables
                                         Frontend useQuery re-renders live
                                         Output: { timeline, root_cause, suspected_fix, similar_incidents }
@@ -767,7 +768,7 @@ Never mark a task complete without proving it works:
 | Real Slack `chat.postMessage` to a demo workspace | Same |
 | Sentry webhook integration | Production-realism signal |
 | Vercel Workflow DevKit for durable agent runs | Production-realism signal |
-| Convex Agent playground at `/playground` | Convex prize amplifier |
+| Adopt `@convex-dev/agent` (managed threads + UI) at `/playground` | Convex prize amplifier (Layer 2; not on demo path today) |
 | Sponsor-rep on-camera quote ("I'd use this") | Validation receipt amplifier |
 
 ### MUST NOT DO
@@ -781,7 +782,7 @@ Never mark a task complete without proving it works:
 - Auto-PRs against external repos (GitHub abuse-flag risk; was DA #2's red card)
 - Auth, billing, multi-tenancy admin features beyond Invariant 3's audit log
 - Pixel-perfect mobile responsive UI (the production URL is the product)
-- LangChain / LangGraph / agent frameworks — Convex Agent component is enough
+- LangChain / LangGraph / heavyweight agent frameworks — a plain Convex action + AI SDK loop is enough; `@convex-dev/agent` is a Layer-2 upgrade
 
 ### Time Sinks That Feel Productive But Aren't
 

@@ -1,19 +1,23 @@
 /* eslint-disable */
 /**
- * Hand-written FALLBACK stub for `convex/_generated/api`.
+ * Generated `api` utility.
  *
- * `npx convex dev` (or `npx convex codegen`) regenerates this file. The
- * regeneration is identical at runtime — `anyApi` is the same object
- * codegen uses; codegen just adds typed declarations.
+ * THIS CODE IS AUTOMATICALLY GENERATED.
  *
- * See `api.d.ts` for the rationale (committed fallback so a fresh clone
- * builds without Convex auth).
- *
+ * To regenerate, run `npx convex dev`.
  * @module
  */
 
 import { anyApi, componentsGeneric } from "convex/server";
 
+/**
+ * A utility for referencing Convex functions in your app's API.
+ *
+ * Usage:
+ * ```js
+ * const myFunctionReference = api.myModule.myFunction;
+ * ```
+ */
 export const api = anyApi;
 export const internal = anyApi;
 export const components = componentsGeneric();

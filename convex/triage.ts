@@ -1,26 +1,33 @@
 /**
- * Convex agent action — entry point for the paste-trace flow.
+ * Convex hot-path mutations + queries for the triage flow (V8 isolate).
  *
- * Invariant 3 (Hot/Cold split): this action writes ONLY to Convex hot-path
+ * Invariant 3 (Hot/Cold split): this file writes ONLY to Convex hot-path
  * tables (triageRuns, toolCalls, citations). The cold-path mirror to
- * InsForge happens at the end via the InsForge client; never the reverse.
+ * InsForge happens from `convex/triage_node.ts` (the Node-runtime action),
+ * which POSTs to `/api/insforge-mirror`. Convex must never `import` the
+ * InsForge client directly — that boundary is enforced by the
+ * `tests/invariants/hot_cold_split.test.ts` file-grep test.
  *
  * Invariant 1 (Cite-Or-Die): every citation persisted here carries a
  * `verified` flag inherited from the tool that produced it.
+ *
+ * Why this file is split V8-only:
+ *   The agent loop (`lib/agent/loop.ts`) uses `node:fs`, `node:path`, and
+ *   `node:crypto` for replay-mode fixture I/O and the cite-or-die verifier.
+ *   Convex's default V8-isolate runtime cannot resolve `node:*` modules.
+ *   Anything that imports `lib/agent/loop` or `lib/hyperspell|nia|insforge`
+ *   MUST live in a `"use node"` file. We keep V8 mutations + queries here
+ *   so reactive `useQuery(api.triage.byId)` stays on the fast path, and we
+ *   put the agent-loop action in `convex/triage_node.ts`.
  */
 
 import { v } from "convex/values";
 import {
-  action,
-  internalAction,
   internalMutation,
   mutation,
   query,
 } from "./_generated/server";
-import { api, internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
-import { runAgent, type AgentEvent } from "../lib/agent/loop";
-import { getInsForge } from "../lib/insforge/client";
+import { internal } from "./_generated/api";
 
 // ─── Mutations (internal — used by the action's event sink) ───────────────────
 
@@ -115,6 +122,10 @@ export const finalizeResult = internalMutation({
  * Frontend calls `useMutation(api.triage.start)` then immediately
  * `useQuery(api.triage.byId, { id })` to subscribe to the live trace.
  * Returns the new triageRunId.
+ *
+ * The agent loop itself runs in `convex/triage_node.ts` (Node runtime).
+ * We schedule it from here so the UI gets the run id immediately and
+ * the loop streams events through the V8 mutations above.
  */
 export const start = mutation({
   args: { orgId: v.string(), trace: v.string() },
@@ -125,153 +136,15 @@ export const start = mutation({
       status: "pending",
       startedAt: Date.now(),
     });
-    // Schedule the agent action to run immediately. We don't await it
-    // — the UI subscribes via useQuery and renders streamed updates.
-    await ctx.scheduler.runAfter(0, internal.triage.runInternal, {
+    // Schedule the Node-runtime agent action to run immediately. We don't
+    // await it — the UI subscribes via useQuery and renders streamed
+    // updates as the action's sink writes them through V8 mutations.
+    await ctx.scheduler.runAfter(0, internal.triage_node.runInternal, {
       triageRunId: id,
       orgId: args.orgId,
       trace: args.trace,
     });
     return id;
-  },
-});
-
-/**
- * Synchronous public action — runs the agent loop end-to-end and
- * returns when status is `done` or `error`. Useful for tests, scripts,
- * and the REST `/api/triage` route fallback. The frontend uses `start`
- * + `useQuery`, NOT this, because it wants the live trace.
- */
-export const run = action({
-  args: { orgId: v.string(), trace: v.string() },
-  handler: async (ctx, args): Promise<{ triageRunId: Id<"triageRuns"> }> => {
-    const triageRunId = (await ctx.runMutation(internal.triage.createRun, {
-      orgId: args.orgId,
-      inputTrace: args.trace,
-    })) as Id<"triageRuns">;
-    await ctx.runAction(internal.triage.runInternal, {
-      triageRunId,
-      orgId: args.orgId,
-      trace: args.trace,
-    });
-    return { triageRunId };
-  },
-});
-
-// ─── Internal action: the actual agent loop ───────────────────────────────────
-
-/**
- * Internal action invoked by `start` via the scheduler. Runs the agent
- * loop from lib/agent/loop.ts and persists every event into Convex
- * tables. Once done, mirrors to InsForge (cold path) per Invariant 3.
- */
-export const runInternal = internalAction({
-  args: {
-    triageRunId: v.id("triageRuns"),
-    orgId: v.string(),
-    trace: v.string(),
-  },
-  handler: async (ctx, args) => {
-    // Track the citation_id mappings so the final result's
-    // `citations: string[]` arrays reference real Convex ids.
-    const citationIdBySourceId = new Map<string, string>();
-
-    const sink = async (event: AgentEvent) => {
-      if (event.type === "status") {
-        await ctx.runMutation(internal.triage.setStatus, {
-          triageRunId: args.triageRunId,
-          status: event.status,
-        });
-      } else if (event.type === "tool_call") {
-        await ctx.runMutation(internal.tools.logToolCall, {
-          triageRunId: args.triageRunId,
-          tool: event.tool,
-          input: event.input,
-          output: event.output,
-          latencyMs: event.latencyMs,
-        });
-      } else if (event.type === "citation") {
-        // Dedupe by source_id within this run.
-        if (!citationIdBySourceId.has(event.citation.source_id)) {
-          const id = (await ctx.runMutation(internal.triage.insertCitation, {
-            triageRunId: args.triageRunId,
-            source: event.citation.source,
-            sourceId: event.citation.source_id,
-            excerpt: event.citation.excerpt,
-            metadata: event.citation.metadata ?? {},
-            verified: event.citation.verified,
-          })) as Id<"citations">;
-          citationIdBySourceId.set(event.citation.source_id, id);
-        }
-      } else if (event.type === "result") {
-        // Persist the final structured output. Map citations from the
-        // result's source_id format back to Convex citation ids.
-        const mapCitations = (cs: { source_id: string }[]): string[] =>
-          cs
-            .map((c) => citationIdBySourceId.get(c.source_id))
-            .filter((id): id is string => Boolean(id));
-
-        await ctx.runMutation(internal.triage.finalizeResult, {
-          triageRunId: args.triageRunId,
-          timeline: event.result.timeline,
-          rootCause: {
-            text: event.result.root_cause.text,
-            citations: mapCitations(event.result.root_cause.citations),
-          },
-          suspectedFix: {
-            file: event.result.suspected_fix.file,
-            line: event.result.suspected_fix.line,
-            diff: event.result.suspected_fix.diff,
-            citations: mapCitations(event.result.suspected_fix.citations),
-          },
-          similarIncidents: event.result.similar_incidents.map(
-            (s) => s.memory_id
-          ),
-        });
-      } else if (event.type === "error") {
-        await ctx.runMutation(internal.triage.setStatus, {
-          triageRunId: args.triageRunId,
-          status: "error",
-          errorMessage: event.message,
-        });
-      }
-    };
-
-    let result;
-    try {
-      result = await runAgent(
-        { trace: args.trace, orgId: args.orgId },
-        sink
-      );
-    } catch (err) {
-      await sink({ type: "error", message: (err as Error).message });
-      return;
-    }
-
-    // Invariant 3: mirror to InsForge cold path. Fire-and-forget; replay
-    // mode no-ops, so the demo path always succeeds. We DO NOT await
-    // a failure here — the Convex run's `done` status is the source of
-    // truth for the UI.
-    if (result) {
-      const insforge = getInsForge();
-      await insforge.mirrorIncident({
-        orgId: args.orgId,
-        triageRunId: args.triageRunId,
-        trace: args.trace,
-        rootCause: result.root_cause.text,
-      });
-
-      // Invariant 2: reinforce matched memories so Trace B's recall is
-      // biased toward them. Reinforcement lives in convex/reinforce.ts —
-      // the only place that writes `triage_history` memories.
-      try {
-        await ctx.runAction(api.reinforce.reinforce, {
-          triageRunId: args.triageRunId,
-        });
-      } catch (err) {
-        console.warn("[triage] reinforcement step failed (non-fatal):", err);
-      }
-    }
   },
 });
 

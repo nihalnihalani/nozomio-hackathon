@@ -124,8 +124,14 @@ export type TriageResult = z.infer<typeof TriageResultSchema>;
 export const DemoModeSchema = z.enum(["live", "replay", "hybrid"]);
 export type DemoMode = z.infer<typeof DemoModeSchema>;
 
+/**
+ * Production default is `live`. `replay` is opt-in for hermetic tests
+ * and offline dev (set `DEMO_MODE=replay` explicitly). Live + missing
+ * keys silently degrades for first-deploy ergonomics — the per-client
+ * branches log loudly and skip rather than throw.
+ */
 export function getDemoMode(): DemoMode {
-  const raw = process.env.DEMO_MODE ?? "replay";
+  const raw = process.env.DEMO_MODE ?? "live";
   const parsed = DemoModeSchema.safeParse(raw);
-  return parsed.success ? parsed.data : "replay";
+  return parsed.success ? parsed.data : "live";
 }

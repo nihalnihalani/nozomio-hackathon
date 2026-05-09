@@ -85,9 +85,9 @@
         "snippets": [
           {
             "file": "webhooks/stripe.ts",
-            "line": 91,
+            "line": 89,
             "content": "if (event.retry && event.type === \"charge.refunded\") {\n  // BUG: no idempotency check on retry path (refund branch — same gap)\n  return processRefund(event);\n}",
-            "citation_url": "https://github.com/acme-billing/billing-service/blob/main/webhooks/stripe.ts#L91"
+            "citation_url": "https://github.com/acme-billing/billing-service/blob/main/webhooks/stripe.ts#L89-L92"
           },
           {
             "file": "docs/ADR-007-idempotency-keys.md",
@@ -111,17 +111,17 @@
   "result": {
     "timeline": [
       { "at": "2024-05-09T03:48:34Z", "event": "Sentry alert fired: duplicate refund event for charge ch_def456 (event b9d2c4e0)" },
-      { "at": "2024-05-09T03:48:35Z", "event": "Stack frame: processWebhook (webhooks/stripe.ts:91)" },
+      { "at": "2024-05-09T03:48:35Z", "event": "Stack frame: processWebhook (webhooks/stripe.ts:89)" },
       { "at": "2024-05-09T03:47:30Z", "event": "Reinforced memory: agent triaged the same root-cause class 82s earlier (mem_reinforce_traceA_idempotency_cluster)" },
       { "at": "2024-02-18T22:14:51Z", "event": "Reinforcement-surfaced DM: 'add a retry budget on idempotency keys' covers BOTH processCharge AND processRefund (mem_slk_dm_feb18_retry_budget)" },
       { "at": "2024-01-14T03:51:08Z", "event": "Prior incident: Jan 14 #incidents thread (mem_slk_jan14_thread_001)" }
     ],
     "root_cause": {
-      "text": "Same idempotency-check gap as the prior charge-side incident, but on the refund branch at line 91. The Feb 18 DM explicitly warned this would bite both processCharge and processRefund — the retry-budget memory surfaced because Trace A's reinforcement step made it hot. Same fix shape, different surface.",
+      "text": "Same idempotency-check gap as the prior charge-side incident, but on the refund branch at lines 89-92. The Feb 18 DM explicitly warned this would bite both processCharge and processRefund — the retry-budget memory surfaced because Trace A's reinforcement step made it hot. Same fix shape, different surface.",
       "citations": [
         {
           "source": "code",
-          "source_id": "webhooks/stripe.ts:91",
+          "source_id": "webhooks/stripe.ts:89",
           "excerpt": "if (event.retry && event.type === \"charge.refunded\") {\n  // BUG: no idempotency check on retry path (refund branch — same gap)\n  return processRefund(event);\n}",
           "verified": true
         },
@@ -155,7 +155,7 @@
     },
     "suspected_fix": {
       "file": "webhooks/stripe.ts",
-      "line": 91,
+      "line": 89,
       "diff": "@@ webhooks/stripe.ts @@\n-if (event.retry) {\n-  // BUG: missing idempotency check on retry path (refund branch)\n-  await processRefund(event);\n-}\n+if (event.retry) {\n+  const key = `${event.id}:${event.type}`;\n+  if (await idempotencyStore.has(key)) return;\n+  await idempotencyStore.set(key);\n+  await processRefund(event);\n+}",
       "citations": [
         {

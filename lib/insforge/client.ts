@@ -1,14 +1,22 @@
 /**
  * InsForge client — COLD PATH.
  *
- * Invariant 3 (Hot/Cold split): this module is the ONLY way Convex
- * speaks to the durable customer-of-record store. The mirror is
+ * Invariant 3 (Hot/Cold split): this module is the ONLY way the mirror
+ * route speaks to the durable customer-of-record store. The mirror is
  * one-way (Convex → InsForge); a reverse mirror would leak
  * multi-tenant data and is a hard reject in code review.
  *
- * Invariant 4 (Hermetic Demo Mode): in replay or no-keys, mirror
- * becomes a no-op so the demo never fails because InsForge isn't
- * provisioned. The Convex action fires-and-forgets this regardless.
+ * IMPORTANT: Convex actions MUST NOT import this client directly —
+ * they POST to `/api/insforge-mirror` instead. The route is the single
+ * place that holds the InsForge SDK + the shared mirror secret + (in
+ * production) the JWT-derived actor for org-scoped RLS. The
+ * `tests/invariants/hot_cold_split.test.ts` grep enforces this.
+ *
+ * Modes:
+ *   - DEMO_MODE=live   (production default): real call when keys are
+ *                       set; loud `console.warn` + skip ('missing_config')
+ *                       when keys are missing — first-deploy ergonomics.
+ *   - DEMO_MODE=replay (opt-in for tests / hermetic dev): silent no-op.
  */
 
 import { getDemoMode } from "@/lib/types";
@@ -48,13 +56,25 @@ export class InsForgeClient {
   async mirrorIncident(
     input: MirrorIncidentInput
   ): Promise<MirrorIncidentResult> {
-    if (getDemoMode() === "replay") {
+    const mode = getDemoMode();
+    // Replay mode is the silent no-op path — used by hermetic tests and
+    // offline dev. Production runs in `live` mode (the default).
+    if (mode === "replay") {
       return { ok: true, skipped: "replay" };
     }
     const baseUrl = process.env.INSFORGE_BASE_URL;
     const anonKey = process.env.INSFORGE_ANON_KEY;
     if (!baseUrl || !anonKey) {
-      // Invariant 4: silently degrade rather than throw on the demo path.
+      // Production-ready posture: outside replay, a missing config is a
+      // legitimate first-deploy state (the cold path hasn't been
+      // provisioned yet). We degrade silently for the request — the hot
+      // path keeps moving — but log loudly so it's visible in logs.
+      console.warn(
+        "[insforge] mirrorIncident skipped: missing_config (INSFORGE_BASE_URL or INSFORGE_ANON_KEY unset). " +
+          `Drop org=${input.orgId} triageRunId=${input.triageRunId} citations=${
+            (input.citations ?? []).length
+          }`
+      );
       return { ok: true, skipped: "missing_config" };
     }
     const headers = {

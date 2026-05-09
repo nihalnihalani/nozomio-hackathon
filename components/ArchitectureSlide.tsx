@@ -120,10 +120,10 @@ export function ArchitectureSlide({
                 Triage agent
               </p>
               <p className="text-sm font-medium">
-                Convex Agent component
+                Convex actions + reactive useQuery
               </p>
               <p className="text-xs text-muted-foreground">
-                5-stage loop · cite-or-die · reinforced memory
+                Server-side agent loop · cite-or-die · reinforced memory
               </p>
             </div>
 
@@ -149,7 +149,9 @@ export function ArchitectureSlide({
           </div>
 
           <p className="mt-2 border-l-2 border-primary/40 pl-3 text-sm italic text-muted-foreground">
-            Removing any one breaks something specific.
+            Each sponsor owns a clean lane. In live mode all four are
+            load-bearing. Replay mode is a hermetic dev path — Convex and
+            InsForge no-op there so the demo runs without any keys.
           </p>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

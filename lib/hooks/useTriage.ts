@@ -429,16 +429,21 @@ function useTriageSse(): UseTriageReturn {
   const [error, setError] = useState<string | null>(null);
   const inFlightRef = useRef<Set<string>>(new Set());
 
-  // Reset isRunning when all in-flight runs settle.
+  // Reset isRunning when all in-flight runs settle, and garbage-collect
+  // settled IDs from inFlightRef so it doesn't grow unbounded across a
+  // long-lived session (Codex finding).
   useEffect(() => {
     let anyRunning = false;
+    const settled: string[] = [];
     for (const id of inFlightRef.current) {
       const snap = store.get(id);
       if (snap && (snap.status === "pending" || snap.status === "running")) {
         anyRunning = true;
-        break;
+      } else if (snap && (snap.status === "done" || snap.status === "error")) {
+        settled.push(id);
       }
     }
+    for (const id of settled) inFlightRef.current.delete(id);
     if (!anyRunning && isRunning) setIsRunning(false);
   }, [store, isRunning]);
 
@@ -469,7 +474,7 @@ function useTriageSse(): UseTriageReturn {
             "content-type": "application/json",
             accept: "text/event-stream",
           },
-          body: JSON.stringify({ trace, clientRunId: id }),
+          body: JSON.stringify({ trace }),
         });
         if (!res.ok) {
           const message = `triage api ${res.status}`;

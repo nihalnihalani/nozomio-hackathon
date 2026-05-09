@@ -4,9 +4,9 @@
   "snippets": [
     {
       "file": "webhooks/stripe.ts",
-      "line": 91,
+      "line": 89,
       "content": "if (event.retry && event.type === \"charge.refunded\") {\n  // BUG: no idempotency check on retry path (refund branch — same gap)\n  return processRefund(event);\n}",
-      "citation_url": "https://github.com/acme-billing/billing-service/blob/main/webhooks/stripe.ts#L91"
+      "citation_url": "https://github.com/acme-billing/billing-service/blob/main/webhooks/stripe.ts#L89-L92"
     },
     {
       "file": "docs/ADR-007-idempotency-keys.md",
