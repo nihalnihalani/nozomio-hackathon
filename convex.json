@@ -1,0 +1,8 @@
+{
+  "$schema": "https://docs.convex.dev/schemas/convex-json.schema.json",
+  "functions": "convex/",
+  "node": {
+    "externalPackages": [],
+    "nodeVersion": "24"
+  }
+}

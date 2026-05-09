@@ -104,7 +104,18 @@ export const finalizeResult = internalMutation({
       diff: v.string(),
       citations: v.array(v.string()),
     }),
-    similarIncidents: v.array(v.string()),
+    // Codex pass-3 BLOCK: persist the full SimilarIncident shape — not
+    // just memory ids — so the Convex reactive path can render the
+    // reinforcement 🧠 badge in Trace B. Mirrors
+    // `TriageResult["similar_incidents"]` in lib/types.ts.
+    similarIncidents: v.array(
+      v.object({
+        memory_id: v.string(),
+        summary: v.string(),
+        relevance: v.number(),
+        fromTriageHistory: v.optional(v.boolean()),
+      })
+    ),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.triageRunId, {

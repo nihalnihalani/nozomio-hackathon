@@ -140,7 +140,11 @@ interface ConvexRunDoc {
     diff: string;
     citations: string[];
   };
-  similarIncidents?: string[];
+  // Codex pass-3 BLOCK: persisted as the full SimilarIncident shape so the
+  // Convex reactive UI can render the 🧠 reinforcement badge. Previously
+  // this was `string[]` (memory ids) and Trace B's reinforcement-proof
+  // disappeared in Convex mode.
+  similarIncidents?: SimilarIncident[];
   errorMessage?: string;
 }
 
@@ -215,7 +219,7 @@ function countResults(tool: ToolCallSnapshot["tool"], output: unknown): number |
  * `TriageRunSnapshot` the UI expects. ISOLATED `as any`-style narrowing
  * lives here so the rest of the codebase stays type-clean.
  */
-function convexSnapshotToTriageSnapshot(
+export function convexSnapshotToTriageSnapshot(
   raw: unknown
 ): TriageRunSnapshot | null {
   if (!raw || typeof raw !== "object") return null;
@@ -257,18 +261,20 @@ function convexSnapshotToTriageSnapshot(
       }
     : undefined;
 
-  // The hot-path schema stores `similarIncidents` as `string[]` (memory ids
-  // referenced from a separate memory store). The full SimilarIncident
-  // shape (summary, relevance, fromTriageHistory) is only available on the
-  // `result` event, which the SSE path renders directly. For the Convex
-  // reactive path we surface the ids with placeholder summaries so the
-  // SimilarIncidentsCard renders SOMETHING; the agent's full output is also
-  // persisted server-side and can be fetched via a separate query later.
+  // Codex pass-3 BLOCK: the hot-path schema now persists the FULL
+  // SimilarIncident shape (memory_id + summary + relevance +
+  // fromTriageHistory), so we read it through directly. This is what makes
+  // the Trace B 🧠 reinforcement badge visible in Convex mode — previously
+  // the rows were placeholders (blank summary, relevance: 0, no flag) and
+  // the wow-moment proof disappeared.
   const similarIncidents: SimilarIncident[] | undefined = run.similarIncidents
-    ? run.similarIncidents.map((memory_id) => ({
-        memory_id,
-        summary: "",
-        relevance: 0,
+    ? run.similarIncidents.map((s) => ({
+        memory_id: s.memory_id,
+        summary: s.summary,
+        relevance: s.relevance,
+        ...(s.fromTriageHistory !== undefined
+          ? { fromTriageHistory: s.fromTriageHistory }
+          : {}),
       }))
     : undefined;
 

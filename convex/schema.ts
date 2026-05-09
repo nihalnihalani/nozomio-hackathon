@@ -52,8 +52,22 @@ export default defineSchema({
         citations: v.array(v.string()),
       })
     ),
-    // memoryEvent ids — pointer to the matched-prior-incidents records.
-    similarIncidents: v.optional(v.array(v.string())),
+    // Matched prior incidents — full shape so the Convex reactive UI can
+    // render the same SimilarIncidentsCard the SSE path renders, including
+    // the 🧠 reinforcement badge driven by `fromTriageHistory`. Mirrors
+    // `TriageResult["similar_incidents"]` in lib/types.ts. Codex pass-3
+    // BLOCK: previously this was `v.array(v.string())` (memory ids only),
+    // which made Trace B's reinforcement-proof invisible in Convex mode.
+    similarIncidents: v.optional(
+      v.array(
+        v.object({
+          memory_id: v.string(),
+          summary: v.string(),
+          relevance: v.number(),
+          fromTriageHistory: v.optional(v.boolean()),
+        })
+      )
+    ),
     // Bubble agent errors up to the UI, never swallow them.
     errorMessage: v.optional(v.string()),
   }).index("by_org", ["orgId"]),

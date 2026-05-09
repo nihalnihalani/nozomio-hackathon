@@ -30,6 +30,7 @@ import {
   type TraceStateProbe,
 } from "@/lib/agent/loop";
 import { internal } from "@/convex/_generated/api";
+import { getDemoMode } from "@/lib/types";
 
 export const runtime = "nodejs"; // we read seed/ files for cite-or-die
 
@@ -223,11 +224,18 @@ export async function POST(req: NextRequest) {
   });
 }
 
-/** GET /api/triage — health probe. */
+/**
+ * GET /api/triage — health probe. Source of truth for the DemoModeBadge.
+ * Codex pass-3 finding: previously this reported `process.env.DEMO_MODE
+ * ?? "replay"`, while `getDemoMode()` defaulted to `live`. With DEMO_MODE
+ * unset, the badge said "replay" while the agent actually ran live —
+ * an integrity violation. Now both call sites resolve through the same
+ * function so they can't drift.
+ */
 export async function GET() {
   return Response.json({
     ok: true,
-    demoMode: process.env.DEMO_MODE ?? "replay",
+    demoMode: getDemoMode(),
     hasAnthropic: Boolean(process.env.ANTHROPIC_API_KEY),
     hasHyperspell: Boolean(process.env.HYPERSPELL_API_KEY),
     hasNia: Boolean(process.env.NIA_API_KEY),

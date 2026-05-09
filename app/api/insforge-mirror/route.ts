@@ -85,8 +85,20 @@ export async function POST(req: NextRequest) {
     actor: parsed.data.actor,
   });
 
-  // Always 200 with the result envelope — failures are non-fatal for
-  // the calling Convex action (the hot path keeps moving).
+  // Codex pass-3 finding: previously this returned 200 even when the
+  // mirror returned `{ ok: false }`, so InsForge write failures were
+  // invisible to the calling Convex action. Now we map the result to a
+  // proper HTTP status: success / silent-degrade returns 200 (the hot
+  // path keeps moving and the skip reason is in the body for
+  // observability), but a real ok=false (real InsForge call failed)
+  // returns 502 so the caller can log/alert. The body is preserved on
+  // every path so callers can parse the result envelope.
+  if (!result.ok) {
+    console.warn(
+      `[insforge-mirror] mirrorIncident failed: ${result.error ?? "unknown"} (org=${parsed.data.orgId} triageRunId=${parsed.data.triageRunId})`
+    );
+    return NextResponse.json(result, { status: 502 });
+  }
   return NextResponse.json(result, { status: 200 });
 }
 

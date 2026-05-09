@@ -97,10 +97,25 @@ export async function verifyCodeSnippet(
   try {
     content = await fs.readFile(abs, "utf-8");
   } catch {
-    // Seed repo not present — can't verify. Be permissive in dev,
-    // strict in production via the env flag below.
-    if (process.env.STRICT_CITE_OR_DIE === "1") return false;
-    return true;
+    // Codex pass-3 finding: seed-missing previously defaulted to `true`
+    // (permissive) unless STRICT_CITE_OR_DIE=1. That's an Invariant 1
+    // production hole — a deploy that didn't bundle seed/billing-service
+    // would silently accept every code citation as verified.
+    //
+    // New rule: fail closed by default. Permissive mode only when one
+    // of these is explicitly set:
+    //   - DEMO_MODE=replay   (hermetic dev / CI fixture verification)
+    //   - NODE_ENV=test       (vitest run in dev)
+    //   - CITE_OR_DIE_PERMISSIVE=1  (explicit dev escape hatch)
+    //
+    // STRICT_CITE_OR_DIE=1 is now a no-op (always strict by default) —
+    // kept as a deprecated alias.
+    const explicitPermissive =
+      process.env.DEMO_MODE === "replay" ||
+      process.env.NODE_ENV === "test" ||
+      process.env.CITE_OR_DIE_PERMISSIVE === "1";
+    if (explicitPermissive) return true;
+    return false;
   }
   const lines = content.split("\n");
   const idx = snippet.line - 1; // 1-indexed

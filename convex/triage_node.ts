@@ -67,6 +67,12 @@ export const runInternal = internalAction({
   handler: async (ctx, args) => {
     // Track the citation_id mappings so the final result's
     // `citations: string[]` arrays reference real Convex ids.
+    // Codex pass-3 follow-up: dedupe key is `${source}:${source_id}`, NOT
+    // just source_id — otherwise a Slack memory_id that happens to look
+    // like a `file:line` would collide with a code citation and one would
+    // be laundered into the other.
+    const citationKey = (c: { source: string; source_id: string }) =>
+      `${c.source}:${c.source_id}`;
     const citationIdBySourceId = new Map<string, string>();
     // Collect every citation (deduped by source_id) for the InsForge
     // mirror payload. Codex BLOCK: `audit_log.payload.citations` was
@@ -94,8 +100,13 @@ export const runInternal = internalAction({
           latencyMs: event.latencyMs,
         });
       } else if (event.type === "citation") {
-        // Dedupe by source_id within this run.
-        if (!citationIdBySourceId.has(event.citation.source_id)) {
+        // Dedupe by ${source}:${source_id} within this run (see citationKey
+        // comment above for the rationale).
+        const key = citationKey({
+          source: event.citation.source,
+          source_id: event.citation.source_id,
+        });
+        if (!citationIdBySourceId.has(key)) {
           const id = (await ctx.runMutation(internal.triage.insertCitation, {
             triageRunId: args.triageRunId,
             source: event.citation.source,
@@ -104,7 +115,7 @@ export const runInternal = internalAction({
             metadata: event.citation.metadata ?? {},
             verified: event.citation.verified,
           })) as Id<"citations">;
-          citationIdBySourceId.set(event.citation.source_id, id);
+          citationIdBySourceId.set(key, id);
           // Mirror payload uses the wire shape (no Convex Id, no metadata)
           // since the audit_log row is org-scoped and self-contained.
           citationsForMirror.push({
@@ -117,9 +128,13 @@ export const runInternal = internalAction({
       } else if (event.type === "result") {
         // Persist the final structured output. Map citations from the
         // result's source_id format back to Convex citation ids.
-        const mapCitations = (cs: { source_id: string }[]): string[] =>
+        const mapCitations = (
+          cs: { source: string; source_id: string }[]
+        ): string[] =>
           cs
-            .map((c) => citationIdBySourceId.get(c.source_id))
+            .map((c) =>
+              citationIdBySourceId.get(citationKey(c))
+            )
             .filter((id): id is string => Boolean(id));
 
         await ctx.runMutation(internal.triage.finalizeResult, {
@@ -135,9 +150,18 @@ export const runInternal = internalAction({
             diff: event.result.suspected_fix.diff,
             citations: mapCitations(event.result.suspected_fix.citations),
           },
-          similarIncidents: event.result.similar_incidents.map(
-            (s) => s.memory_id
-          ),
+          // Codex pass-3 BLOCK: forward the FULL SimilarIncident shape so
+          // the Convex reactive UI can render the 🧠 reinforcement badge.
+          // Previously this collapsed to `string[]` of memory ids and the
+          // Convex hydration produced blank placeholder rows.
+          similarIncidents: event.result.similar_incidents.map((s) => ({
+            memory_id: s.memory_id,
+            summary: s.summary,
+            relevance: s.relevance,
+            ...(s.fromTriageHistory !== undefined
+              ? { fromTriageHistory: s.fromTriageHistory }
+              : {}),
+          })),
         });
       } else if (event.type === "error") {
         await ctx.runMutation(internal.triage.setStatus, {
@@ -206,11 +230,34 @@ export const runInternal = internalAction({
             actor: `org:${args.orgId}`,
           }),
         });
+        // Codex pass-3 finding: previously we only checked `res.ok` (the
+        // HTTP status). The mirror route now returns the full result
+        // envelope and uses 502 for genuine InsForge failures vs 200 for
+        // success and silent-degrade. Parse the body either way so the
+        // skip reason / error / id is observable in Convex logs.
+        const mirrorBody = (await res.json().catch(() => null)) as
+          | {
+              ok: boolean;
+              skipped?: string;
+              incidentId?: string;
+              auditId?: string;
+              error?: string;
+            }
+          | null;
         if (!res.ok) {
           console.warn(
-            `[triage] insforge mirror non-200: ${res.status} ${await res
-              .text()
-              .catch(() => "")}`
+            `[triage] insforge mirror non-200: status=${res.status} body=${JSON.stringify(mirrorBody)}`
+          );
+        } else if (mirrorBody && mirrorBody.ok === false) {
+          // Should not occur — the route returns 502 in this case — but
+          // defend against future drift.
+          console.warn(
+            `[triage] insforge mirror returned 200 with ok=false: ${mirrorBody.error}`
+          );
+        } else if (mirrorBody?.skipped) {
+          // Visibility for production-mode missing-config skips.
+          console.warn(
+            `[triage] insforge mirror skipped=${mirrorBody.skipped} (org=${args.orgId})`
           );
         }
       } catch (err) {

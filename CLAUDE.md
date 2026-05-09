@@ -58,7 +58,7 @@
 
 A **3-person team** drives a **5-stage agent loop** that maps an incident input (stack trace / Sentry webhook) onto a cited triage with reinforcement-learned memory.
 
-- **Convex** (hot path) — schema + reactive queries + scheduled actions for the live trace. The agent loop runs server-side as a Convex Node-runtime action (`convex/triage_node.ts`), not via `@convex-dev/agent`. Adopting the agent component is a Layer 2 upgrade; the current path keeps `useQuery(api.triage.byId)` as the "live agent thinking" surface.
+- **Convex** (hot path) — schema + reactive queries + scheduled actions for the live trace. The agent loop runs server-side as a Convex Node-runtime action (`convex/triage_node.ts`), not via `@convex-dev/agent`. Adopting the agent component is a Layer 2 upgrade; the current path keeps `useQuery(api.triage.byId)` as the "live agent thinking" surface. **Node-action deployment setup, the `convex.json` shape, and the `.nvmrc` Node-24 pin are documented in [`README.md` §"Convex Node-action deployment"](./README.md#convex-node-action-deployment) — read that before touching `convex/*_node.ts` or running `npx convex codegen`.**
 - **Hyperspell** — multi-source memory across Slack #incidents + Notion postmortems + Gmail vendor outages; `recallSimilarIncidents` tool with weighted source scoring; reinforcement step after each triage
 - **Nia** — code-aware monorepo + ADR + runbook indexing; `searchCode` tool; cite-or-die verifier checks `file:line` actually contains claimed code
 - **InsForge** — multi-tenant Postgres + auth (prebuilt magic-link React component) + RLS by `org_id`; mirrors every triage to `incidents` + `audit_log` tables

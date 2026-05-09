@@ -10,7 +10,8 @@
  *   data/replay/hyperspell/_writes.log            // for memories.add (append-only)
  *
  * Invariant 2 (Reinforcement): every `triage_history` write MUST come
- * from `convex/reinforce.ts`. Other call-sites that write `triage_history`
+ * from `convex/reinforce_node.ts` (the Node-runtime action that owns
+ * the Hyperspell SDK). Other call-sites that write `triage_history`
  * memories are a hard reject in code review.
  */
 
@@ -85,7 +86,7 @@ const ReplaySearchPayloadSchema = z.object({
 export class HyperspellClient {
   readonly memories = {
     add: async (input: AddMemoryInput): Promise<{ id: string }> => {
-      // Invariant 2: this method is only invoked from convex/reinforce.ts
+      // Invariant 2: this method is only invoked from convex/reinforce_node.ts
       // (for `source: 'triage_history'`) and from scripts/ingest.ts (for
       // pre-loading slack/notion/gmail seed data). The frontend NEVER
       // calls this — Codex flags any other call site.
