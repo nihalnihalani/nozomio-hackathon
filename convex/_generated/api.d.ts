@@ -13,6 +13,7 @@ import type * as reinforceNode from "../reinforceNode.js";
 import type * as test from "../test.js";
 import type * as tools from "../tools.js";
 import type * as toolsNode from "../toolsNode.js";
+import type * as traceState from "../traceState.js";
 import type * as triage from "../triage.js";
 import type * as triageNode from "../triageNode.js";
 
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   test: typeof test;
   tools: typeof tools;
   toolsNode: typeof toolsNode;
+  traceState: typeof traceState;
   triage: typeof triage;
   triageNode: typeof triageNode;
 }>;
