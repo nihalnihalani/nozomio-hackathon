@@ -35,6 +35,7 @@ Thumbs.db
 
 # Agent runtime state (machine-local, not for repo)
 .claude/agent-memory/
+.claude/settings.local.json
 .omc/
 
 # Logs

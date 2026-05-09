@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy this to .claude/settings.local.json (gitignored) and fill in your Hyperspell credentials. The MCP server is loaded at Claude Code session start; restart after editing.",
+  "mcpServers": {
+    "hyperspell": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@hyperspell/hyperspell-mcp@latest",
+        "--client=claude-code",
+        "--tools=all"
+      ],
+      "env": {
+        "HYPERSPELL_API_KEY": "your-hyperspell-api-key",
+        "HYPERSPELL_USER_ID": "your-hyperspell-user-id"
+      }
+    }
+  }
+}
