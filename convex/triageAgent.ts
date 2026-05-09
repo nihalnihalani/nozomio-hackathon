@@ -126,8 +126,15 @@ const recallSimilarIncidents = createTool({
           output: { memories: res.memories },
           latencyMs,
         });
-        for (const m of res.memories as Memory[]) {
-          if (!m?.id || !m?.text || !m?.source) continue;
+      } catch (err) {
+        console.warn("[recallSimilarIncidents] logToolCall failed:", err);
+      }
+      // Round-2 DA finding (C3): mirror each citation independently so a
+      // single bad row (e.g., unexpected source) doesn't abort the rest of
+      // the recall payload mid-loop.
+      for (const m of res.memories as Memory[]) {
+        if (!m?.id || !m?.text || !m?.source) continue;
+        try {
           await ctx.runMutation(api.triage.insertCitation, {
             triageRunId: resolved.runId,
             source: m.source,
@@ -140,10 +147,12 @@ const recallSimilarIncidents = createTool({
             // contract that recall results are pre-verified.
             verified: true,
           });
+        } catch (err) {
+          console.warn(
+            `[recallSimilarIncidents] insertCitation ${m.id} failed:`,
+            err
+          );
         }
-      } catch (err) {
-        // Surface but don't fail — the agent still gets the data.
-        console.warn("[recallSimilarIncidents] mirror failed:", err);
       }
     }
 
@@ -179,8 +188,13 @@ const searchCode = createTool({
           output: res,
           latencyMs,
         });
-        for (const s of res.snippets as CodeSnippet[]) {
-          if (!s?.file || typeof s.line !== "number") continue;
+      } catch (err) {
+        console.warn("[searchCode] logToolCall failed:", err);
+      }
+      // Round-2 DA finding (C3): mirror each snippet independently.
+      for (const s of res.snippets as CodeSnippet[]) {
+        if (!s?.file || typeof s.line !== "number") continue;
+        try {
           await ctx.runMutation(api.triage.insertCitation, {
             triageRunId: resolved.runId,
             source: "code",
@@ -192,9 +206,12 @@ const searchCode = createTool({
             // snippets reach this point. Same convention as the SSE path.
             verified: true,
           });
+        } catch (err) {
+          console.warn(
+            `[searchCode] insertCitation ${s.file}:${s.line} failed:`,
+            err
+          );
         }
-      } catch (err) {
-        console.warn("[searchCode] mirror failed:", err);
       }
     }
 
@@ -303,13 +320,43 @@ const produceTriage = createTool({
     for (const c of citationRows) {
       idBySourceId.set(c.sourceId, String(c._id));
     }
-    const mapCites = (sourceIds: string[]): string[] =>
-      sourceIds
-        .map((sid) => idBySourceId.get(sid))
-        .filter((id): id is string => Boolean(id));
+    // Cite-Or-Die (Invariant 1): fabricated source_ids must NOT silently drop.
+    // If the agent passes a sid that wasn't surfaced by recallSimilarIncidents
+    // / searchCode, return a tool-error so the agent retries with verifiable
+    // citations. (Round-2 DA finding: silent .filter() let uncited rootCauses
+    // sneak past the produceTriage-was-called verifier.)
+    const mapCitesOrFail = (
+      sourceIds: string[],
+      label: string
+    ): { ok: true; ids: string[] } | { ok: false; error: string } => {
+      const ids: string[] = [];
+      const missing: string[] = [];
+      for (const sid of sourceIds) {
+        const id = idBySourceId.get(sid);
+        if (id) ids.push(id);
+        else missing.push(sid);
+      }
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          error: `Cite-Or-Die violation: ${label} referenced source_id(s) [${missing.join(", ")}] not surfaced by recallSimilarIncidents/searchCode. Re-run produceTriage citing only ids from prior tool outputs.`,
+        };
+      }
+      return { ok: true, ids };
+    };
 
-    const rootCauseCitations = mapCites(input.root_cause.citations);
-    const suspectedFixCitations = mapCites(input.suspected_fix.citations);
+    const rootCauseRes = mapCitesOrFail(
+      input.root_cause.citations,
+      "root_cause"
+    );
+    if (!rootCauseRes.ok) return { ok: false, error: rootCauseRes.error };
+    const suspectedFixRes = mapCitesOrFail(
+      input.suspected_fix.citations,
+      "suspected_fix"
+    );
+    if (!suspectedFixRes.ok) return { ok: false, error: suspectedFixRes.error };
+    const rootCauseCitations = rootCauseRes.ids;
+    const suspectedFixCitations = suspectedFixRes.ids;
 
     // Enrich similar_incidents.fromTriageHistory by joining against the
     // recalled-memory metadata captured in the toolCalls table — same

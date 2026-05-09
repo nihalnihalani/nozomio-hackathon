@@ -181,6 +181,22 @@ export const runTriage = internalAction({
     threadId: v.string(),
   },
   handler: async (ctx, args) => {
+    // ─── Pre-flight: Anthropic key required for live agent path ─────────
+    // Round-2 DA finding (M2): `runTriage` dives straight into
+    // `triageAgent.continueThread` → `streamText`, which throws an opaque
+    // SDK error if no Anthropic key is set. The replay path in
+    // `lib/agent/loop.ts:runLive` falls back gracefully; the agent path
+    // surfaces a clear error instead so the user sees the actual problem.
+    if (!process.env.ANTHROPIC_API_KEY) {
+      await ctx.runMutation(api.triage.setStatus, {
+        triageRunId: args.triageRunId,
+        status: "error",
+        errorMessage:
+          "ANTHROPIC_API_KEY is not set in the Convex deployment. The agent live path requires it. Set the key via `npx convex env set ANTHROPIC_API_KEY ...` or run with `DEMO_MODE=replay` for the hermetic demo path.",
+      });
+      return;
+    }
+
     // ─── Status: running ──────────────────────────────────────────────────
     await ctx.runMutation(api.triage.setStatus, {
       triageRunId: args.triageRunId,
@@ -223,8 +239,20 @@ export const runTriage = internalAction({
       // `api.triage.finalizeResult` from inside its `execute()`. We don't
       // text-parse the stream here; tool-call validation through Zod
       // `inputSchema` is the Cite-Or-Die enforcement point.
+      // Round-2 DA finding (M1): `experimental_telemetry` is an AI SDK
+      // option (lives on the first arg, alongside `prompt` — the agent
+      // SDK splits args this way; `saveStreamDeltas` lives on the second
+      // arg). Passing it makes PostHog OTel `gen_ai.*` spans emit on the
+      // agent path; without it PostHog sees agent-mode runs as black
+      // holes. Replay/SSE path passes the same flag in `runLive`.
       const stream = await thread.streamText(
-        { prompt: args.trace },
+        {
+          prompt: args.trace,
+          experimental_telemetry: {
+            isEnabled: true,
+            functionId: "triage-agent",
+          },
+        },
         { saveStreamDeltas: true }
       );
       // Drain the text stream so all tool calls fire before we proceed.
