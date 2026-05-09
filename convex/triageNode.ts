@@ -217,6 +217,12 @@ export const runTriage = internalAction({
       // `useUIMessages({ stream: true })` to subscribe to. Iteration
       // ensures the stream completes before the action exits (the agent
       // component's tool dispatcher needs to drain).
+      //
+      // Note: structured-output persistence is owned by the `produceTriage`
+      // tool (`convex/triageAgent.ts`) — it writes to triageRuns via
+      // `api.triage.finalizeResult` from inside its `execute()`. We don't
+      // text-parse the stream here; tool-call validation through Zod
+      // `inputSchema` is the Cite-Or-Die enforcement point.
       const stream = await thread.streamText(
         { prompt: args.trace },
         { saveStreamDeltas: true }
@@ -234,6 +240,30 @@ export const runTriage = internalAction({
       return;
     }
 
+    // ─── Verify produceTriage actually ran ────────────────────────────────
+    // The agent's contract (system prompt + tool schema) is to terminate
+    // by calling `produceTriage`, which writes the structured fields to
+    // the triageRuns row. If those fields are still empty, the agent
+    // bailed without producing a final triage — surface that as an error
+    // rather than silently advancing to `done` (Invariant 1: prefer
+    // honest failure to silent fabrication).
+    const finalRun = await ctx.runQuery(api.triage.runById, {
+      id: args.triageRunId,
+    });
+    const producedTriage = Boolean(
+      finalRun?.rootCause && finalRun?.suspectedFix
+    );
+
+    if (!producedTriage) {
+      await ctx.runMutation(api.triage.setStatus, {
+        triageRunId: args.triageRunId,
+        status: "error",
+        errorMessage:
+          "Agent finished without calling produceTriage. No structured triage was produced — refusing to mark this run as done.",
+      });
+      return;
+    }
+
     // ─── Status: done ─────────────────────────────────────────────────────
     await ctx.runMutation(api.triage.setStatus, {
       triageRunId: args.triageRunId,
@@ -241,17 +271,17 @@ export const runTriage = internalAction({
     });
 
     // ─── Cold-path mirror (Invariant 3) ──────────────────────────────────
-    // We mirror the run + a placeholder root cause; Wave 2A populates the
-    // structured rootCause/suspectedFix from the agent's UIMessages once
-    // the frontend swap lands. Until then, the mirror still records the
-    // incident for the audit log (the durable cold-path requirement).
+    // The mirror now carries the real root-cause text produced by the
+    // agent's `produceTriage` step (vs the placeholder we used before
+    // structured persistence landed). The InsForge mirror is the durable
+    // audit-grade record of the incident.
     try {
       const insforge = getInsForge();
       await insforge.mirrorIncident({
         orgId: args.orgId,
         triageRunId: args.triageRunId,
         trace: args.trace,
-        rootCause: "(see agent thread for structured triage)",
+        rootCause: finalRun?.rootCause?.text ?? "(no root cause produced)",
       });
     } catch (err) {
       console.warn("[triage] InsForge mirror failed (non-fatal):", err);

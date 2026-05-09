@@ -14,7 +14,7 @@
 
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
 import { components, internal } from "./_generated/api";
 import {
   createThread,
@@ -271,6 +271,61 @@ export const listMessages = query({
     const paginated = await listUIMessages(ctx, agentComponent, args);
     const streams = await syncStreams(ctx, agentComponent, args);
     return { ...paginated, streams };
+  },
+});
+
+// ─── Agent-tool support: hot-path read helpers used by produceTriage ────────
+//
+// `produceTriage` (in `convex/triageAgent.ts`) is an Agent tool whose
+// `execute()` runs in an action context. It needs to (a) resolve tool-time
+// citations into Convex ids and (b) detect `fromTriageHistory` from prior
+// recall outputs. Both reads are internal-only — we never expose them on
+// the public API surface.
+
+export const _citationsByRun = internalQuery({
+  args: { triageRunId: v.id("triageRuns") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("citations")
+      .withIndex("by_run", (q) => q.eq("triageRunId", args.triageRunId))
+      .collect();
+  },
+});
+
+export const _toolCallsByRun = internalQuery({
+  args: { triageRunId: v.id("triageRuns") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("toolCalls")
+      .withIndex("by_run", (q) => q.eq("triageRunId", args.triageRunId))
+      .order("asc")
+      .collect();
+  },
+});
+
+// ─── Agent-tool support: threadId → triageRunId resolution ──────────────────
+//
+// The Agent Component's `createTool` execute() runs with an action ctx but
+// no direct knowledge of the triageRunId — only `ctx.threadId`. The runner
+// (`triageNode.ts:runTriage`) writes the threadId onto the `triageRuns` row
+// in `triage.start`, so we can join here. Used by:
+//   - `produceTriage` (final structured output → triageRuns patch)
+//   - `recallSimilarIncidents` / `searchCode` (mirror to toolCalls + citations
+//     so the legacy `useQuery(api.triage.byId)` reactive consumers still work)
+export const runIdByThreadId = internalQuery({
+  args: { threadId: v.string() },
+  handler: async (ctx, args): Promise<{ id: string; orgId: string } | null> => {
+    // Linear scan over recent rows. The agent path's threadId is unique
+    // per run, so we can pick the most-recent matching row. Convex
+    // doesn't have a `where threadId = ?` index here yet — adding one
+    // is a deferred polish (avoid a schema migration mid-Wave).
+    const rows = await ctx.db.query("triageRuns").order("desc").take(200);
+    for (const r of rows) {
+      if (r.threadId === args.threadId) {
+        return { id: String(r._id), orgId: r.orgId };
+      }
+    }
+    return null;
   },
 });
 

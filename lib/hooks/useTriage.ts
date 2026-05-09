@@ -9,12 +9,13 @@
  * - `run({ trace })`  → returns `triageRunId: string`
  * - `byId(id)`        → returns reactive `TriageRunSnapshot` (or null while loading)
  *
- * Convex path (active when NEXT_PUBLIC_CONVEX_URL is set) — Phase 2:
- *   - Kicks off the agent via POST /api/triage. The Next.js route runs
- *     `api.triage.start` which creates an Agent component thread, persists
+ * Convex path (active when NEXT_PUBLIC_CONVEX_URL is set AND a fast probe
+ * to that URL succeeds — see `convexProbeOk` below) — Phase 2:
+ *   - Kicks off the agent via `useMutation(api.triage.start)({orgId, trace})`.
+ *     The mutation creates an Agent component thread, persists
  *     `triageRuns.threadId`, and schedules `internal.triageNode.runTriage`
  *     (which calls `thread.streamText({ saveStreamDeltas: true })`).
- *   - Reads ONLY the `run_started` SSE event to capture the Convex runId.
+ *     The mutation returns the Convex `triageRunId` directly — no SSE.
  *   - The hook then subscribes to:
  *       1. `useQuery(api.triage.runById, { id })` to resolve `threadId`
  *          + run-level metadata (status, timeline, rootCause, suspectedFix,
@@ -26,23 +27,26 @@
  *
  *   Why fetch threadId via runById? The frontend only knows the triageRunId
  *   after `start` returns; the threadId lives on that row. One reactive
- *   query per slot resolves it cleanly without changing the public API. The
- *   alternative — having `start` return both ids — would force a second
- *   handshake field on the SSE protocol and complicate the SSE-fallback
- *   contract for no real win.
+ *   query per slot resolves it cleanly without changing the public API.
  *
  *   Limitation: hooks can't be called conditionally, so this hook hardcodes
  *   TWO subscription slots (Trace A / Trace B layout). A 3rd concurrent run
  *   would not render.
  *
- * SSE path (fallback when NEXT_PUBLIC_CONVEX_URL is unset) — UNCHANGED:
+ *   Probe gate (fresh-clone safety): `NEXT_PUBLIC_CONVEX_URL` set without a
+ *   reachable backend used to hang the UI for 8s before failing. Now we
+ *   fire-and-forget `${url}/version` on mount; mode flips to `convex` only
+ *   on success. Until probe completes (or on probe failure) we stay in SSE
+ *   mode so dev iteration with no convex backend Just Works.
+ *
+ * SSE path (fallback when NEXT_PUBLIC_CONVEX_URL is unset OR probe fails):
  *   - POSTs `{ trace }` to `/api/triage`, consumes Server-Sent Events,
  *     accumulates a snapshot in local React state keyed by client-side id.
  *   - Demo runs with no Convex connection at all (Invariant 4).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useUIMessages, useSmoothText } from "@convex-dev/agent/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -127,8 +131,40 @@ export interface UseTriageReturn {
   byId: (id: string | null) => TriageRunSnapshot | null;
 }
 
-function hasConvex(): boolean {
-  return Boolean(process.env.NEXT_PUBLIC_CONVEX_URL);
+function convexEnvUrl(): string | null {
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+  return url && url.length > 0 ? url : null;
+}
+
+/**
+ * Cheap reachability probe for the convex backend. Used to gate
+ * convex-mode dispatch on a fresh clone where `.env.local` advertises
+ * `NEXT_PUBLIC_CONVEX_URL=http://127.0.0.1:3210` but no `npx convex dev`
+ * is running locally. Without this, every triage attempt hangs on the
+ * 8s `run_started` failsafe before silently failing.
+ *
+ * The probe is fire-and-forget; on success we flip to convex mode, on
+ * any failure (network, timeout, non-2xx) we stay in SSE mode.
+ *
+ * Probe target: `/version` is the cheapest documented convex HTTP
+ * endpoint and exists on every deployment (cloud or `convex dev`).
+ */
+async function probeConvex(url: string, timeoutMs = 1500): Promise<boolean> {
+  if (typeof window === "undefined") return false;
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await fetch(`${url.replace(/\/$/, "")}/version`, {
+      method: "GET",
+      signal: controller.signal,
+      // GET /version is plain text; don't send credentials or auth.
+      cache: "no-store",
+    });
+    clearTimeout(t);
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 // ─── Adapter: UIMessage[] + run row → TriageRunSnapshot ─────────────────────
@@ -554,78 +590,6 @@ function applySseEvent(
   return next;
 }
 
-/**
- * Read the SSE stream just long enough to extract the `run_started`
- * event, then return the convex runId. Subsequent SSE frames are
- * ignored — Convex `useUIMessages` becomes the source of truth from there.
- *
- * Reads continue in the background until the stream ends so the server
- * can finish writing without ECONNRESET.
- */
-async function readConvexRunIdFromSse(
-  response: Response
-): Promise<Id<"triageRuns"> | null> {
-  if (!response.body) return null;
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let foundId: Id<"triageRuns"> | null = null;
-  let resolved = false;
-
-  // Drain in the background until done.
-  const drain = (async () => {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) return;
-      buffer += decoder.decode(value, { stream: true });
-      let idx = buffer.indexOf("\n\n");
-      while (idx !== -1) {
-        const frame = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + 2);
-        idx = buffer.indexOf("\n\n");
-        let evtType = "message";
-        let dataLine = "";
-        for (const line of frame.split("\n")) {
-          if (line.startsWith("event:")) evtType = line.slice(6).trim();
-          else if (line.startsWith("data:")) dataLine += line.slice(5).trim();
-        }
-        if (evtType === "run_started" && dataLine && !resolved) {
-          try {
-            const payload = JSON.parse(dataLine) as { triageRunId: string };
-            foundId = payload.triageRunId as unknown as Id<"triageRuns">;
-            resolved = true;
-          } catch {
-            /* malformed; keep draining */
-          }
-        }
-      }
-    }
-  })();
-
-  // Race: either we find run_started, or the stream completes (which
-  // means the agent ran without mirror writes — Convex absent / down).
-  await Promise.race([
-    new Promise<void>((resolve) => {
-      const tick = setInterval(() => {
-        if (resolved) {
-          clearInterval(tick);
-          resolve();
-        }
-      }, 20);
-      // Failsafe: never wait more than 8s for the run_started handshake.
-      setTimeout(() => {
-        clearInterval(tick);
-        resolve();
-      }, 8000);
-    }),
-    drain,
-  ]);
-
-  // Don't await the full drain — let it finish in the background.
-  void drain;
-  return foundId;
-}
-
 async function consumeFullSseStream(
   response: Response,
   runId: string,
@@ -729,7 +693,29 @@ function useConvexSlot(runId: Id<"triageRuns"> | null): ConvexSlot {
 // ─── The public hook ─────────────────────────────────────────────────────────
 
 export function useTriage(): UseTriageReturn {
-  const mode: TriageMode = hasConvex() ? "convex" : "sse";
+  // Mode selection: env-gate (`NEXT_PUBLIC_CONVEX_URL` set) AND a successful
+  // `/version` probe at mount. Until probe completes (or on probe failure),
+  // we stay in SSE mode — see file-level comment for rationale.
+  const envUrl = convexEnvUrl();
+  const [convexProbeOk, setConvexProbeOk] = useState(false);
+  const mode: TriageMode = envUrl && convexProbeOk ? "convex" : "sse";
+
+  useEffect(() => {
+    if (!envUrl) return;
+    let cancelled = false;
+    void probeConvex(envUrl).then((ok) => {
+      if (!cancelled && ok) setConvexProbeOk(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [envUrl]);
+
+  // Convex agent kickoff. The hook is always mounted (rules of hooks); the
+  // mutation only fires when `mode === "convex"`. `useMutation` reads the
+  // ConvexProvider from `app/providers.tsx`, which is always mounted with
+  // a placeholder URL when env is unset (see providers.tsx for why).
+  const startTriage = useMutation(api.triage.start);
 
   // Two slots for Convex subscriptions. Hardcoded because hooks can't be
   // called conditionally — see file-level comment.
@@ -799,32 +785,25 @@ export function useTriage(): UseTriageReturn {
 
       if (mode === "convex") {
         try {
-          const res = await fetch("/api/triage", {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              accept: "text/event-stream",
-            },
-            body: JSON.stringify({ trace }),
-          });
-          if (!res.ok) {
-            const message = `triage api ${res.status}`;
+          // Phase 2 wiring: kick off the agent component directly via
+          // `api.triage.start`. The mutation creates the Agent thread,
+          // persists `triageRuns.threadId`, schedules `runTriage`, and
+          // returns the new triageRunId. No SSE; the reactive
+          // `useConvexSlot` subscription drives the UI from here on.
+          const id = (await startTriage({
+            orgId: "demo-org",
+            trace,
+          })) as Id<"triageRuns">;
+          if (!id) {
+            const message = "convex start returned no id";
             setError(message);
             setIsRunning(false);
             return "";
           }
-          const convexId = await readConvexRunIdFromSse(res);
-          if (!convexId) {
-            const message =
-              "convex run_started not received — falling back may be needed";
-            setError(message);
-            setIsRunning(false);
-            return "";
-          }
-          placeInSlot(convexId);
-          return convexId as unknown as string;
+          placeInSlot(id);
+          return id as unknown as string;
         } catch (e) {
-          const message = e instanceof Error ? e.message : "fetch failed";
+          const message = e instanceof Error ? e.message : "convex start failed";
           setError(message);
           setIsRunning(false);
           throw e;
@@ -895,7 +874,7 @@ export function useTriage(): UseTriageReturn {
       }
       return id;
     },
-    [mode, placeInSlot]
+    [mode, placeInSlot, startTriage]
   );
 
   const byId = useCallback(

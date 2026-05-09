@@ -179,6 +179,43 @@ function AgentThinkingText({
 }
 
 /**
+ * Degraded-or-error banner. Surfaces `snapshot.error` for any status:
+ *   - `[degraded] …` prefix → yellow banner (the run still completed; this
+ *     is an honesty signal, e.g. Invariant 2 reinforcement was not active).
+ *   - any other error string → red banner (run failed).
+ *
+ * The Codex pass-3 gate in `convex/triageNode.ts` writes `errorMessage`
+ * on a `running` (then `done`) status when no prior Trace A is found; the
+ * `done` status without surfacing this would silently drop Invariant 2's
+ * cite-or-die honesty signal. (DA major-bug-#1.)
+ */
+function ErrorOrDegradedBanner({
+  error,
+  status,
+}: {
+  error: string;
+  status: TriageRunSnapshot["status"];
+}) {
+  const isDegraded = error.startsWith("[degraded]");
+  const isError = status === "error" && !isDegraded;
+  return (
+    <Card
+      className={cn(
+        "p-4 text-sm",
+        isError
+          ? "border-red-500/40 bg-red-500/5 text-red-300"
+          : "border-yellow-500/40 bg-yellow-500/5 text-yellow-200"
+      )}
+    >
+      <div className="flex items-start gap-2">
+        <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+        <span className="font-mono whitespace-pre-wrap">{error}</span>
+      </div>
+    </Card>
+  );
+}
+
+/**
  * Streaming "agent thinking" panel. Renders each tool call as a card and
  * groups citations under the call that produced them (best-effort by index;
  * if the backend doesn't tag citations with toolCallId, all citations show
@@ -270,13 +307,11 @@ export function TraceUI({
           />
         )}
 
-        {snapshot.status === "error" && snapshot.error && (
-          <Card className="border-red-500/40 bg-red-500/5 p-4 text-sm text-red-300">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="h-4 w-4" />
-              <span className="font-mono">{snapshot.error}</span>
-            </div>
-          </Card>
+        {snapshot.error && (
+          <ErrorOrDegradedBanner
+            error={snapshot.error}
+            status={snapshot.status}
+          />
         )}
       </div>
     </div>

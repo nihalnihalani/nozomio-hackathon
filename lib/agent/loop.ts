@@ -285,9 +285,18 @@ function extractToolCitations(
 // Loose types for the dynamic AI SDK import — the build must work even
 // if the installed `ai` version (4.x vs 5.x vs 6.x) differs from what
 // the runtime expects. The try/catch + replay fallback is the contract.
+//
+// AI SDK v6 contract: `tool({ description, inputSchema, execute })`. The
+// v4-era `parameters:` key was renamed to `inputSchema:` in v5/v6 (see
+// node_modules/ai/dist/index.d.ts → re-export of `tool` from
+// `@ai-sdk/provider-utils` whose `Tool<INPUT, OUTPUT>` type uses
+// `inputSchema: FlexibleSchema<INPUT>`). Passing `parameters` silently
+// fails to wire the Zod schema, the LLM never sees the tool's input
+// shape, and tool calls degrade to dynamic-only or no-op. Verified:
+// node_modules/ai/package.json reports version "6.0.177".
 type AiToolFactory = (def: {
   description?: string;
-  parameters: unknown;
+  inputSchema: unknown;
   execute: (args: unknown) => unknown | Promise<unknown>;
 }) => unknown;
 type AiStreamText = (config: Record<string, unknown>) => Promise<{
@@ -336,7 +345,8 @@ async function runLive(
     recallSimilarIncidents: tool({
       description:
         "Search the team's Slack #incidents history, Notion postmortem database, and Gmail vendor outage threads via Hyperspell. Returns the top-5 most relevant memories with metadata.",
-      parameters: z.object({
+      // AI SDK v6: `inputSchema` (was `parameters:` in v4). See AiToolFactory.
+      inputSchema: z.object({
         signature: z
           .string()
           .min(1)
@@ -371,7 +381,8 @@ async function runLive(
     searchCode: tool({
       description:
         "Search the production monorepo, ADRs, and runbooks via Nia. Returns code snippets with file:line locations and recent commits. Snippets are pre-verified — claimed file:line contains claimed code.",
-      parameters: z.object({
+      // AI SDK v6: `inputSchema` (was `parameters:` in v4). See AiToolFactory.
+      inputSchema: z.object({
         query: z.string().min(1).describe("Code-search query"),
       }),
       execute: async (rawArgs: unknown) => {
@@ -410,6 +421,15 @@ async function runLive(
       prompt,
       tools,
       maxSteps: 5,
+      // PostHog OTel wire — `convex/observability.ts` registers a global
+      // `BasicTracerProvider` + `PostHogTraceExporter` at module scope when
+      // `POSTHOG_API_KEY` is set. The AI SDK only emits `gen_ai.*` spans
+      // when telemetry is explicitly enabled per-call (default off). With
+      // `isEnabled: true`, every streamText call lands in PostHog as
+      // `$ai_generation` events with cost/latency/model/prompt/response.
+      // No-op when PostHog isn't configured (the registered provider is a
+      // dev-friendly default tracer).
+      experimental_telemetry: { isEnabled: true, functionId: "triage" },
     };
     // AI SDK 5+: prefer stopWhen: stepCountIs(5).
     if (typeof stepCountIs === "function") {
