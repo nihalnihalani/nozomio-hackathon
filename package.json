@@ -22,6 +22,7 @@
     "@ai-sdk/openai": "^3.0.63",
     "@ai-sdk/react": "^3.0.179",
     "@convex-dev/agent": "^0.6.1",
+    "@hyperspell/hyperspell": "^0.38.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.217.0",
     "@opentelemetry/resources": "^2.7.1",
