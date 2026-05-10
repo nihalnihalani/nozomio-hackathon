@@ -11,7 +11,7 @@
  *
  * Convex path (active when NEXT_PUBLIC_CONVEX_URL is set AND a fast probe
  * to that URL succeeds — see `convexProbeOk` below) — Phase 2:
- *   - Kicks off the agent via `useMutation(api.triage.start)({orgId, trace})`.
+ *   - Kicks off the agent via `useMutation(api.triage.start)({trace})`.
  *     The mutation creates an Agent component thread, persists
  *     `triageRuns.threadId`, and schedules `internal.triageNode.runTriage`
  *     (which calls `thread.streamText({ saveStreamDeltas: true })`).
@@ -52,6 +52,7 @@ import { useUIMessages, useSmoothText } from "@convex-dev/agent/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { Citation } from "@/lib/types";
+import { resolvePublicOrgId } from "@/lib/org";
 
 // Re-export `useSmoothText` so components can opt into per-token rendering
 // without importing `@convex-dev/agent/react` directly. Centralizing the
@@ -137,12 +138,8 @@ function convexEnvUrl(): string | null {
   return url && url.length > 0 ? url : null;
 }
 
-function configuredOrgId(): string {
-  const orgId = process.env.NEXT_PUBLIC_TRIAGE_ORG_ID?.trim();
-  if (!orgId) {
-    throw new Error("NEXT_PUBLIC_TRIAGE_ORG_ID is required to start triage");
-  }
-  return orgId;
+function configuredOrgId(): string | undefined {
+  return resolvePublicOrgId();
 }
 
 /**
@@ -800,9 +797,10 @@ export function useTriage(): UseTriageReturn {
           // persists `triageRuns.threadId`, schedules `runTriage`, and
           // returns the new triageRunId. No SSE; the reactive
           // `useConvexSlot` subscription drives the UI from here on.
+          const orgId = configuredOrgId();
           const id = (await startTriage({
-            orgId: configuredOrgId(),
             trace,
+            ...(orgId ? { orgId } : {}),
           })) as Id<"triageRuns">;
           if (!id) {
             const message = "convex start returned no id";
@@ -822,6 +820,7 @@ export function useTriage(): UseTriageReturn {
 
       // ─── SSE fallback path ────────────────────────────────────────────────
       const id = makeId();
+      const orgId = configuredOrgId();
       inFlightRef.current.add(id);
       setSseStore((s) => {
         const next = new Map(s);
@@ -845,7 +844,7 @@ export function useTriage(): UseTriageReturn {
           },
           body: JSON.stringify({
             trace,
-            orgId: configuredOrgId(),
+            ...(orgId ? { orgId } : {}),
             clientRunId: id,
           }),
         });
