@@ -7,7 +7,7 @@ import { z } from "zod";
 
 // ─── Sources ──────────────────────────────────────────────────────────────────
 
-export const SourceTypeSchema = z.enum(["slack", "notion", "gmail", "code"]);
+export const SourceTypeSchema = z.enum(["slack", "notion", "gmail", "google_drive", "code"]);
 export type SourceType = z.infer<typeof SourceTypeSchema>;
 
 // ─── Citation ─────────────────────────────────────────────────────────────────

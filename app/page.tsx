@@ -7,6 +7,7 @@ import { ArchitectureSlide } from "@/components/ArchitectureSlide";
 import { CitationDrawer } from "@/components/CitationDrawer";
 import { ConvexLiveActivity } from "@/components/ConvexLiveActivity";
 import { DemoModeBadge } from "@/components/DemoModeBadge";
+import { HyperspellConnectButton } from "@/components/HyperspellConnectButton";
 import { PasteTraceInput } from "@/components/PasteTraceInput";
 import { TraceUI } from "@/components/TraceUI";
 import { TimelineCard } from "@/components/ResultCards/TimelineCard";
@@ -192,6 +193,24 @@ export default function HomePage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <HyperspellConnectButton
+              getToken={async () => {
+                const res = await fetch("/api/hyperspell/token", {
+                  method: "POST",
+                });
+                const payload = (await res.json()) as {
+                  token?: string;
+                  error?: string;
+                };
+                if (!res.ok || !payload.token) {
+                  throw new Error(
+                    payload.error ?? "Hyperspell token endpoint failed"
+                  );
+                }
+                const { token } = payload;
+                return token;
+              }}
+            />
             <DemoModeBadge />
             <Button
               type="button"

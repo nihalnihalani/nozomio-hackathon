@@ -58,6 +58,7 @@ const DEFAULT_SOURCE_WEIGHTS: NonNullable<SearchOptions["source_weights"]> = {
   slack: 0.5,
   notion: 0.4,
   gmail: 0.1,
+  google_drive: 0.1,
 };
 
 const REPLAY_ROOT = path.join(process.cwd(), "data", "replay", "hyperspell");
@@ -247,7 +248,8 @@ async function liveSearch(
       typeof d.metadata?.source === "string"
         ? (d.metadata.source as SourceType)
         : undefined;
-    const source = metaSource ?? (d.source as SourceType | undefined);
+    const sourceRaw = d.source === "google_mail" ? "gmail" : d.source;
+    const source = metaSource ?? (sourceRaw as SourceType | undefined);
     // The query endpoint does not return text; surface `title` as the
     // excerpt fallback. If neither is present, drop the result rather
     // than fabricate (Invariant 1 — Cite-or-Die).

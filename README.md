@@ -178,7 +178,7 @@ Required env vars (set on Vercel):
 
 - `NEXT_PUBLIC_CONVEX_URL` — points at your Convex deployment
 - `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` — required for the live agent
-- `HYPERSPELL_API_KEY` — required for live memory recall/writeback
+- `HYPERSPELL_API_KEY`, `HYPERSPELL_CONNECT_USER_ID` — required for live memory recall/writeback and workspace connect tokens
 - `NIA_API_KEY` — required for live code search
 - `NIA_SOURCE_ROOT` — source checkout used by cite-or-die verification
 - `INSFORGE_BASE_URL`, `INSFORGE_SERVICE_ROLE_KEY`, `INSFORGE_MIRROR_SECRET` — required for durable cold-path mirroring

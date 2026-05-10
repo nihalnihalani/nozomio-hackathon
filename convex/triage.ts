@@ -71,6 +71,7 @@ export const insertCitation = mutation({
       v.literal("slack"),
       v.literal("notion"),
       v.literal("gmail"),
+      v.literal("google_drive"),
       v.literal("code")
     ),
     sourceId: v.string(),

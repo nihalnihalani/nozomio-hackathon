@@ -18,6 +18,8 @@ const SOURCE_STYLES: Record<SourceType, string> = {
   notion:
     "bg-zinc-500/10 border-zinc-500/40 text-zinc-300 hover:bg-zinc-500/20",
   gmail: "bg-red-500/10 border-red-500/40 text-red-300 hover:bg-red-500/20",
+  google_drive:
+    "bg-emerald-500/10 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/20",
   code:
     "bg-green-500/10 border-green-500/40 text-green-300 hover:bg-green-500/20",
 };
@@ -31,6 +33,8 @@ function SourceIcon({ source }: { source: SourceType }) {
       return <FileText className={cls} />;
     case "gmail":
       return <Mail className={cls} />;
+    case "google_drive":
+      return <FileText className={cls} />;
     case "code":
       return <Code2 className={cls} />;
   }
