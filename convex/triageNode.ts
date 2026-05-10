@@ -219,7 +219,7 @@ export const runTriage = internalAction({
         triageRunId: args.triageRunId,
         status: "running",
         errorMessage:
-          "[degraded] No recent reinforced incident found for this org. Memory reinforcement is not active yet, so recall results may be less specific.",
+          "[degraded] First-time triage for this org — reinforcement memory will activate after this run completes. Follow-up alerts will draw on the stored context.",
       });
     }
 
