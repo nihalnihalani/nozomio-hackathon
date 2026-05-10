@@ -193,6 +193,8 @@ interface LiveSearchResponseRaw {
     source?: string;
     resource_id?: string;
     title?: string | null;
+    summary?: string | null;
+    highlights?: Array<{ text?: string | null } | null> | null;
     metadata?: Record<string, unknown>;
     score?: number | null;
     folder_id?: string | null;
@@ -250,10 +252,16 @@ async function liveSearch(
         : undefined;
     const sourceRaw = d.source === "google_mail" ? "gmail" : d.source;
     const source = metaSource ?? (sourceRaw as SourceType | undefined);
-    // The query endpoint does not return text; surface `title` as the
-    // excerpt fallback. If neither is present, drop the result rather
-    // than fabricate (Invariant 1 — Cite-or-Die).
-    const text = d.title ?? "";
+    // Hyperspell `/memories/query` does NOT return raw text. The richest
+    // available text is `summary` (one-paragraph chunk summary), then
+    // `highlights[].text` (per-match excerpts), then `title` as a last
+    // resort. Take the first non-empty in that order. If everything is
+    // empty, drop the result rather than fabricate (Invariant 1 —
+    // Cite-or-Die).
+    const firstHighlight = (d.highlights ?? []).find(
+      (h): h is { text: string } => Boolean(h && typeof h.text === "string" && h.text.length > 0)
+    );
+    const text = d.summary || firstHighlight?.text || d.title || "";
     if (!id || !source || !text) return [];
     const safe = MemorySchema.safeParse({
       id,
