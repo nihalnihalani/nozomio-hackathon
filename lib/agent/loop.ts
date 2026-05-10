@@ -176,7 +176,9 @@ function sleep(ms: number): Promise<void> {
  */
 export function* extractCitations(result: TriageResult): Iterable<Citation> {
   for (const c of result.root_cause.citations) yield c;
-  for (const c of result.suspected_fix.citations) yield c;
+  if (result.suspected_fix) {
+    for (const c of result.suspected_fix.citations) yield c;
+  }
 }
 
 // ─── Replay runner ────────────────────────────────────────────────────────────

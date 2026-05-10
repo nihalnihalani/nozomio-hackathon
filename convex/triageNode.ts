@@ -103,12 +103,12 @@ export const runInternal = internalAction({
             text: event.result.root_cause.text,
             citations: mapCitations(event.result.root_cause.citations),
           },
-          suspectedFix: {
+          suspectedFix: event.result.suspected_fix ? {
             file: event.result.suspected_fix.file,
             line: event.result.suspected_fix.line,
             diff: event.result.suspected_fix.diff,
             citations: mapCitations(event.result.suspected_fix.citations),
-          },
+          } : undefined,
           similarIncidents: event.result.similar_incidents.map(
             (s) => s.memory_id
           ),

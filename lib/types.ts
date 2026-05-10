@@ -97,12 +97,12 @@ export const TriageResultSchema = z.object({
     text: z.string(),
     citations: z.array(CitationSchema),
   }),
-  suspected_fix: z.object({
+  suspected_fix: z.optional(z.object({
     file: z.string(),
     line: z.number(),
     diff: z.string(),
     citations: z.array(CitationSchema),
-  }),
+  })),
   similar_incidents: z.array(
     z.object({
       memory_id: z.string(),

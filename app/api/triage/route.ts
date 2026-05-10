@@ -235,14 +235,14 @@ export async function POST(req: NextRequest) {
                   (c) => c.source_id
                 ),
               },
-              suspectedFix: {
+              suspectedFix: event.result.suspected_fix ? {
                 file: event.result.suspected_fix.file,
                 line: event.result.suspected_fix.line,
                 diff: event.result.suspected_fix.diff,
                 citations: event.result.suspected_fix.citations.map(
                   (c) => c.source_id
                 ),
-              },
+              } : undefined,
               similarIncidents: event.result.similar_incidents.map(
                 (s) => s.memory_id
               ),

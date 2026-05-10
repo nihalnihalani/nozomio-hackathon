@@ -46,7 +46,7 @@ async function readFixture(name: string): Promise<TraceFixture> {
 }
 
 function allCitations(result: TriageResult): Citation[] {
-  return [...result.root_cause.citations, ...result.suspected_fix.citations];
+  return [...result.root_cause.citations, ...(result.suspected_fix?.citations || [])];
 }
 
 describe("Invariant 1 — Cite-Or-Die", () => {
@@ -110,8 +110,10 @@ describe("Invariant 1 — Cite-Or-Die", () => {
       const mentioned = claimText.match(filePathRegex) ?? [];
       const cited = new Set<string>();
       for (const c of allCitations(t.result)) cited.add(c.source_id);
-      cited.add(`${t.result.suspected_fix.file}:${t.result.suspected_fix.line}`);
-      cited.add(t.result.suspected_fix.file);
+      if (t.result.suspected_fix) {
+        cited.add(`${t.result.suspected_fix.file}:${t.result.suspected_fix.line}`);
+        cited.add(t.result.suspected_fix.file);
+      }
 
       for (const file of mentioned) {
         const someCitationMatches = [...cited].some((id) =>

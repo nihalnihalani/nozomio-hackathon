@@ -172,54 +172,54 @@ function AgentThinkingText({
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
-                p: ({ children }) => (
+                p: ({ children }: any) => (
                   <p className="my-2 leading-snug first:mt-0 last:mb-0">
                     {children}
                   </p>
                 ),
-                h1: ({ children }) => (
+                h1: ({ children }: any) => (
                   <h3 className="mt-3 mb-2 text-base font-semibold first:mt-0">
                     {children}
                   </h3>
                 ),
-                h2: ({ children }) => (
+                h2: ({ children }: any) => (
                   <h4 className="mt-3 mb-2 text-sm font-semibold first:mt-0">
                     {children}
                   </h4>
                 ),
-                h3: ({ children }) => (
+                h3: ({ children }: any) => (
                   <h5 className="mt-3 mb-1.5 text-sm font-semibold first:mt-0">
                     {children}
                   </h5>
                 ),
-                ul: ({ children }) => (
+                ul: ({ children }: any) => (
                   <ul className="my-2 list-disc space-y-0.5 pl-5">
                     {children}
                   </ul>
                 ),
-                ol: ({ children }) => (
+                ol: ({ children }: any) => (
                   <ol className="my-2 list-decimal space-y-0.5 pl-5">
                     {children}
                   </ol>
                 ),
-                li: ({ children }) => <li className="leading-snug">{children}</li>,
-                strong: ({ children }) => (
+                li: ({ children }: any) => <li className="leading-snug">{children}</li>,
+                strong: ({ children }: any) => (
                   <strong className="font-semibold text-foreground">
                     {children}
                   </strong>
                 ),
-                em: ({ children }) => <em className="italic">{children}</em>,
-                code: ({ children }) => (
+                em: ({ children }: any) => <em className="italic">{children}</em>,
+                code: ({ children }: any) => (
                   <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
                     {children}
                   </code>
                 ),
-                pre: ({ children }) => (
+                pre: ({ children }: any) => (
                   <pre className="my-2 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs">
                     {children}
                   </pre>
                 ),
-                a: ({ href, children }) => (
+                a: ({ href, children }: any) => (
                   <a
                     href={href}
                     target="_blank"
@@ -229,7 +229,7 @@ function AgentThinkingText({
                     {children}
                   </a>
                 ),
-                blockquote: ({ children }) => (
+                blockquote: ({ children }: any) => (
                   <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground">
                     {children}
                   </blockquote>
