@@ -440,25 +440,15 @@ export const triageAgent = new Agent(agentComponent, {
   // enforced by `tests/invariants/agent_component.test.ts`.
   stopWhen: stepCountIs(8),
   contextOptions: {
-    // Phase 4 — built-in tool-based RAG over message history.
-    // `searchOtherThreads: true` lets the agent surface relevant context
-    // from prior threads belonging to the same userId (= orgId). The
-    // `traceState.hasRecentReinforcement` probe in `triageNode.ts` produces
-    // the user-visible `[degraded]` event when no recent reinforcement exists.
-    searchOtherThreads: true,
-    // Sliding window of recent messages to include verbatim.
+    // `searchOtherThreads` was disabled because @convex-dev/agent's
+    // built-in cross-thread RAG asserts `No text to search` on the first
+    // run of a fresh org (no prior thread text to extract from). Our own
+    // Hyperspell `recallSimilarIncidents` tool already does the
+    // cross-incident memory job — explicit, cited, and the load-bearing
+    // path for Invariant 2 reinforcement.
+    searchOtherThreads: false,
+    // Sliding window of recent messages to include verbatim within the
+    // current thread.
     recentMessages: 10,
-    searchOptions: {
-      // Text search over thread message history. We do NOT enable
-      // `vectorSearch: true` here because that requires an
-      // `embeddingModel` on the Agent constructor (e.g.
-      // `openai.embedding("text-embedding-3-small")`). The project pins
-      // Anthropic for chat — adding an embedding provider is an
-      // intentional follow-up. Text search alone still surfaces prior
-      // threads from the same `userId` (= orgId) when the trace tokens
-      // overlap, which is sufficient for follow-up incident context.
-      limit: 10,
-      textSearch: true,
-    },
   },
 });

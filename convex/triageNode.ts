@@ -248,6 +248,15 @@ export const runTriage = internalAction({
       const stream = await thread.streamText(
         {
           prompt: args.trace,
+          // Force every step to call a tool. gpt-4o otherwise loves to
+          // emit a markdown summary AS TEXT after the retrieval round
+          // and stop, never calling `produceTriage`. With "required",
+          // each step must call a tool — once `recallSimilarIncidents`
+          // and `searchCode` have been called, the only tool left is
+          // `produceTriage`, so the model is pushed into the structured-
+          // output sink. `stopWhen: stepCountIs(8)` (configured on the
+          // Agent) still bounds the loop.
+          toolChoice: "required",
           experimental_telemetry: {
             isEnabled: true,
             functionId: "triage-agent",
