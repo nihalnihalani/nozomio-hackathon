@@ -102,6 +102,7 @@ export default defineSchema({
       v.literal("slack"),
       v.literal("notion"),
       v.literal("gmail"),
+      v.literal("google_drive"),
       v.literal("code")
     ),
     // Hyperspell memory_id for slack/notion/gmail, "file:line" for code.
