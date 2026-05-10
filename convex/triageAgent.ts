@@ -282,7 +282,10 @@ const produceTriage = createTool({
             "source_ids backing the fix (e.g. ADR or helper-fn citations)"
           ),
       })
-      .describe("Proposed code change"),
+      .describe(
+        "Proposed code change. OMIT this field entirely if searchCode returned no code citations — do not fabricate a fix without code evidence (Cite-Or-Die)."
+      )
+      .optional(),
     similar_incidents: z
       .array(
         z.object({
@@ -351,13 +354,14 @@ const produceTriage = createTool({
       "root_cause"
     );
     if (!rootCauseRes.ok) return { ok: false, error: rootCauseRes.error };
-    const suspectedFixRes = mapCitesOrFail(
-      input.suspected_fix.citations,
-      "suspected_fix"
-    );
-    if (!suspectedFixRes.ok) return { ok: false, error: suspectedFixRes.error };
+    const suspectedFixRes = input.suspected_fix
+      ? mapCitesOrFail(input.suspected_fix.citations, "suspected_fix")
+      : null;
+    if (suspectedFixRes && !suspectedFixRes.ok)
+      return { ok: false, error: suspectedFixRes.error };
     const rootCauseCitations = rootCauseRes.ids;
-    const suspectedFixCitations = suspectedFixRes.ids;
+    const suspectedFixCitations =
+      suspectedFixRes && suspectedFixRes.ok ? suspectedFixRes.ids : [];
 
     // Enrich similar_incidents.fromTriageHistory by joining against the
     // recalled-memory metadata captured in the toolCalls table — same
@@ -389,12 +393,14 @@ const produceTriage = createTool({
         text: input.root_cause.text,
         citations: rootCauseCitations,
       },
-      suspectedFix: {
-        file: input.suspected_fix.file,
-        line: input.suspected_fix.line,
-        diff: input.suspected_fix.diff,
-        citations: suspectedFixCitations,
-      },
+      suspectedFix: input.suspected_fix
+        ? {
+            file: input.suspected_fix.file,
+            line: input.suspected_fix.line,
+            diff: input.suspected_fix.diff,
+            citations: suspectedFixCitations,
+          }
+        : undefined,
       similarIncidents: input.similar_incidents.map((s) => s.memory_id),
       similarIncidentsDetailed,
     });
