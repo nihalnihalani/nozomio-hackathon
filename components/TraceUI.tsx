@@ -8,6 +8,8 @@ import {
   CheckCircle2,
   AlertCircle,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Card } from "@/components/ui/card";
 import { CitationPill } from "@/components/CitationPill";
 import { cn, formatDuration } from "@/lib/utils";
@@ -166,12 +168,80 @@ function AgentThinkingText({
           <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
             agent
           </div>
-          <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">
-            {visibleText}
+          <div className="mt-1 text-sm text-foreground">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                p: ({ children }) => (
+                  <p className="my-2 leading-snug first:mt-0 last:mb-0">
+                    {children}
+                  </p>
+                ),
+                h1: ({ children }) => (
+                  <h3 className="mt-3 mb-2 text-base font-semibold first:mt-0">
+                    {children}
+                  </h3>
+                ),
+                h2: ({ children }) => (
+                  <h4 className="mt-3 mb-2 text-sm font-semibold first:mt-0">
+                    {children}
+                  </h4>
+                ),
+                h3: ({ children }) => (
+                  <h5 className="mt-3 mb-1.5 text-sm font-semibold first:mt-0">
+                    {children}
+                  </h5>
+                ),
+                ul: ({ children }) => (
+                  <ul className="my-2 list-disc space-y-0.5 pl-5">
+                    {children}
+                  </ul>
+                ),
+                ol: ({ children }) => (
+                  <ol className="my-2 list-decimal space-y-0.5 pl-5">
+                    {children}
+                  </ol>
+                ),
+                li: ({ children }) => <li className="leading-snug">{children}</li>,
+                strong: ({ children }) => (
+                  <strong className="font-semibold text-foreground">
+                    {children}
+                  </strong>
+                ),
+                em: ({ children }) => <em className="italic">{children}</em>,
+                code: ({ children }) => (
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                    {children}
+                  </code>
+                ),
+                pre: ({ children }) => (
+                  <pre className="my-2 overflow-x-auto rounded-md border border-border bg-muted/40 p-3 text-xs">
+                    {children}
+                  </pre>
+                ),
+                a: ({ href, children }) => (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:underline"
+                  >
+                    {children}
+                  </a>
+                ),
+                blockquote: ({ children }) => (
+                  <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground">
+                    {children}
+                  </blockquote>
+                ),
+              }}
+            >
+              {visibleText}
+            </ReactMarkdown>
             {streaming && (
               <span className="ml-0.5 inline-block h-3 w-1.5 animate-pulse bg-foreground align-middle" />
             )}
-          </p>
+          </div>
         </div>
       </div>
     </Card>
