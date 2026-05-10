@@ -91,6 +91,40 @@ export const TimelineEventSchema = z.object({
 });
 export type TimelineEvent = z.infer<typeof TimelineEventSchema>;
 
+// Citations in the parsed-from-LLM TriageResult come back as bare
+// source_id strings OR full Citation objects (the agent prompt asks for
+// strings; older fixtures may have objects). `TriageResultRawSchema`
+// accepts either; `runLive` then hydrates strings into Citation objects
+// using the seen-citations map populated by tool calls. Downstream code
+// (UI, mirror, tests) consumes the strict `TriageResultSchema` shape
+// where citations are always Citation objects.
+const CitationOrIdSchema = z.union([z.string(), CitationSchema]);
+
+export const TriageResultRawSchema = z.object({
+  timeline: z.array(TimelineEventSchema),
+  root_cause: z.object({
+    text: z.string(),
+    citations: z.array(CitationOrIdSchema),
+  }),
+  suspected_fix: z.optional(
+    z.object({
+      file: z.string(),
+      line: z.number(),
+      diff: z.string(),
+      citations: z.array(CitationOrIdSchema),
+    })
+  ),
+  similar_incidents: z.array(
+    z.object({
+      memory_id: z.string(),
+      summary: z.string(),
+      relevance: z.number(),
+      fromTriageHistory: z.boolean().optional(),
+    })
+  ),
+});
+export type TriageResultRaw = z.infer<typeof TriageResultRawSchema>;
+
 export const TriageResultSchema = z.object({
   timeline: z.array(TimelineEventSchema),
   root_cause: z.object({

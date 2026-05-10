@@ -23,6 +23,7 @@ import {
   type SearchCodeOutput,
   type TriageResult,
   TriageResultSchema,
+  TriageResultRawSchema,
   getDemoMode,
 } from "@/lib/types";
 import { getHyperspell, SOURCE_WEIGHTS } from "@/lib/hyperspell/client";
@@ -408,6 +409,16 @@ async function runLive(
 
   await emit({ type: "status", status: "running" });
 
+  // Track citations surfaced by tool calls so the post-parse step can
+  // hydrate any string source_id citations the LLM emitted into full
+  // Citation objects (with excerpt + verified). The agent prompt
+  // instructs the LLM to use bare source_id strings — see TriageResult
+  // CitationOrIdSchema in lib/types.ts.
+  const seenCitations = new Map<string, Citation>();
+  const recordCitation = (c: Citation) => {
+    if (!seenCitations.has(c.source_id)) seenCitations.set(c.source_id, c);
+  };
+
   const tools = {
     recallSimilarIncidents: tool({
       description:
@@ -440,6 +451,7 @@ async function runLive(
           "recallSimilarIncidents",
           output
         )) {
+          recordCitation(c);
           await emit({ type: "citation", citation: c });
         }
         return output;
@@ -471,6 +483,7 @@ async function runLive(
           at: Date.now(),
         });
         for (const c of extractToolCitations("searchCode", output)) {
+          recordCitation(c);
           await emit({ type: "citation", citation: c });
         }
         return output;
@@ -525,9 +538,9 @@ async function runLive(
       "Model returned no JSON"
     );
   }
-  let parsed: TriageResult;
+  let raw;
   try {
-    parsed = TriageResultSchema.parse(JSON.parse(jsonMatch[0]));
+    raw = TriageResultRawSchema.parse(JSON.parse(jsonMatch[0]));
   } catch (err) {
     return await failOrReplay(
       input,
@@ -536,6 +549,37 @@ async function runLive(
       `Result schema validation failed: ${(err as Error).message}`
     );
   }
+
+  // Hydrate string citations (bare source_ids) into full Citation objects
+  // using the seenCitations map populated from tool emissions. Strings
+  // that don't resolve get dropped — Cite-Or-Die: better honest empty
+  // than fabricated metadata. Citation objects pass through as-is.
+  const hydrate = (cs: Array<string | Citation>): Citation[] =>
+    cs.flatMap((c) =>
+      typeof c === "string"
+        ? seenCitations.has(c)
+          ? [seenCitations.get(c) as Citation]
+          : []
+        : [c]
+    );
+  const parsed: TriageResult = {
+    timeline: raw.timeline,
+    root_cause: {
+      text: raw.root_cause.text,
+      citations: hydrate(raw.root_cause.citations),
+    },
+    suspected_fix: raw.suspected_fix
+      ? {
+          file: raw.suspected_fix.file,
+          line: raw.suspected_fix.line,
+          diff: raw.suspected_fix.diff,
+          citations: hydrate(raw.suspected_fix.citations),
+        }
+      : undefined,
+    similar_incidents: raw.similar_incidents,
+  };
+  // Belt-and-suspenders: enforce the strict shape for downstream consumers.
+  TriageResultSchema.parse(parsed);
 
   await emit({ type: "result", result: parsed });
   await emit({ type: "status", status: "done" });
