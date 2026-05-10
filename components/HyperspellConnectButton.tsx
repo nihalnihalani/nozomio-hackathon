@@ -26,7 +26,9 @@ export function HyperspellConnectButton({ getToken }: Props) {
       window.location.href = `https://connect.hyperspell.com?token=${token}&redirect_uri=${encodeURIComponent(redirectUri)}`;
     } catch (error) {
       console.error('Failed to get Hyperspell token:', error);
-      alert('Failed to connect. Please try again.');
+      const message =
+        error instanceof Error ? error.message : 'Unknown error';
+      alert(`Connect failed: ${message}`);
       setLoading(false);
     }
   }
