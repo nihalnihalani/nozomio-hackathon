@@ -182,7 +182,8 @@ Required env vars (set on Vercel):
 - `NIA_API_KEY` — required for live code search
 - `NIA_SOURCE_ROOT` — source checkout used by cite-or-die verification
 - `INSFORGE_BASE_URL`, `INSFORGE_SERVICE_ROLE_KEY`, `INSFORGE_MIRROR_SECRET` — required for durable cold-path mirroring
-- `NEXT_PUBLIC_TRIAGE_ORG_ID`, `TRIAGE_DEFAULT_ORG_ID` — org scope used by the UI/API fallback
+- `TRIAGE_DEFAULT_ORG_ID` or `TRIAGE_ORG_SEED` — optional org override/seed; if unset, server and Convex generate a stable single-tenant org id from deployment metadata
+- `NEXT_PUBLIC_TRIAGE_ORG_ID` — optional; only needed for the browser-rendered recent-runs panel
 - `DEMO_MODE=live` — production default; use `replay` only for fixture playback
 
 Note: Vercel rejects deploys of Next.js < 15.1.7 (CVE-2025-66478).

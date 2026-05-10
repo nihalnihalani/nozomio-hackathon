@@ -29,6 +29,7 @@ import { runAgent, type AgentEvent } from "@/lib/agent/loop";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { getDemoMode } from "@/lib/types";
+import { resolveServerOrgId } from "@/lib/org";
 
 export const runtime = "nodejs"; // we read seed/ files for cite-or-die
 
@@ -71,14 +72,6 @@ function encodeFrame(frame: SseFrame): Uint8Array {
  * Map an AgentEvent into one or more SSE frames matching the frontend's
  * useTriage hook contract.
  */
-function configuredDefaultOrgId(): string | null {
-  return (
-    process.env.TRIAGE_DEFAULT_ORG_ID?.trim() ||
-    process.env.NEXT_PUBLIC_TRIAGE_ORG_ID?.trim() ||
-    null
-  );
-}
-
 function toSseFrames(event: AgentEvent, sequence: number): SseFrame[] {
   switch (event.type) {
     case "status":
@@ -157,13 +150,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { trace, fixtureHint, clientRunId } = parsed.data;
-  const orgId = parsed.data.orgId ?? configuredDefaultOrgId();
-  if (!orgId) {
-    return new Response(
-      "orgId is required. Set TRIAGE_DEFAULT_ORG_ID or send orgId in the request body.",
-      { status: 400 }
-    );
-  }
+  const orgId = parsed.data.orgId ?? resolveServerOrgId();
   const convex = makeConvexMirror();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -317,6 +304,7 @@ export async function GET() {
     hasOpenAI: Boolean(process.env.OPENAI_API_KEY),
     hasHyperspell: Boolean(process.env.HYPERSPELL_API_KEY),
     hasNia: Boolean(process.env.NIA_API_KEY),
+    orgId: resolveServerOrgId(),
     hasInsForge: Boolean(
       process.env.INSFORGE_BASE_URL &&
         (process.env.INSFORGE_SERVICE_ROLE_KEY || process.env.INSFORGE_ANON_KEY)

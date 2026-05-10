@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { resolvePublicOrgId } from "@/lib/org";
 
 /**
  * Live "Recent Triages" panel — subscribes to Convex via useQuery and
@@ -21,7 +22,7 @@ import { api } from "@/convex/_generated/api";
  * provider in the tree.
  */
 export function ConvexLiveActivity({
-  orgId = process.env.NEXT_PUBLIC_TRIAGE_ORG_ID?.trim(),
+  orgId = resolvePublicOrgId(),
 }: {
   orgId?: string;
 }) {
