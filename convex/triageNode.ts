@@ -209,7 +209,7 @@ export const runTriage = internalAction({
     // makes missing reinforcement visible.
     const hasRecentReinforcement = await ctx.runQuery(
       internal.traceState.hasRecentReinforcement,
-      { orgId: args.orgId, withinMs: 5 * 60 * 1000 }
+      { orgId: args.orgId }
     );
     if (!hasRecentReinforcement) {
       // Persist the marker without failing the run. The status stays

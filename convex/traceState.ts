@@ -14,7 +14,7 @@
 import { v } from "convex/values";
 import { internalQuery } from "./_generated/server";
 
-const DEFAULT_WINDOW_MS = 5 * 60 * 1000; // 5 minutes — same as the in-process TTL.
+const DEFAULT_WINDOW_MS = 60 * 60 * 1000; // 1 hour — covers a normal demo session.
 
 function hasReinforcedSources(reinforcedMemoryIds: string[]): boolean {
   return reinforcedMemoryIds.some((id) => id.trim().length > 0);
