@@ -24,7 +24,7 @@ interface TraceUIProps {
   onCitationClick?: (citation: Citation) => void;
   /** Set of source_ids that are new in this run vs prior — pulses them */
   newSourceIds?: Set<string>;
-  /** Optional title override (e.g. "Trace A" / "Trace B") */
+  /** Optional title override. */
   label?: string;
 }
 
@@ -135,8 +135,8 @@ function ToolCallCard({
  * `isStreaming` while a UIMessage is mid-stream). `useSmoothText` paces
  * the visible characters so judges see the thought form word-by-word
  * rather than landing in one chunk. SSE-path snapshots leave both fields
- * undefined → this component renders nothing, preserving the existing
- * tool-call-card-only UX for the demo lifeboat.
+   * undefined -> this component renders nothing, preserving the existing
+   * tool-call-card-only UX for SSE fixture playback.
  */
 function AgentThinkingText({
   text,
@@ -184,10 +184,9 @@ function AgentThinkingText({
  *     is an honesty signal, e.g. Invariant 2 reinforcement was not active).
  *   - any other error string → red banner (run failed).
  *
- * The Codex pass-3 gate in `convex/triageNode.ts` writes `errorMessage`
- * on a `running` (then `done`) status when no prior Trace A is found; the
- * `done` status without surfacing this would silently drop Invariant 2's
- * cite-or-die honesty signal. (DA major-bug-#1.)
+   * `convex/triageNode.ts` writes `errorMessage` on a `running` (then
+   * `done`) status when no recent reinforcement exists; the `done` status
+   * without surfacing this would silently drop the Invariant 2 honesty signal.
  */
 function ErrorOrDegradedBanner({
   error,
@@ -224,7 +223,7 @@ function ErrorOrDegradedBanner({
  * INTEGRATION NOTE: this component reads from a snapshot produced by
  * `useTriage()` (Convex `useUIMessages` or SSE state). It does not call
  * hooks itself at the top level — keep render pure so we can mount it
- * twice for Trace A vs B. (`AgentThinkingText` is conditionally mounted
+   * twice for side-by-side incident comparison. (`AgentThinkingText` is conditionally mounted
  * but conditioned only on snapshot presence, so hook ordering is stable
  * per slot.)
  */

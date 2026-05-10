@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 
@@ -7,10 +8,10 @@ import { api } from "@/convex/_generated/api";
  * Live "Recent Triages" panel — subscribes to Convex via useQuery and
  * re-renders reactively as the /api/triage mirror writes new rows.
  *
- * Demonstrates Invariant 3 (hot-path Convex) for judges: paste a trace,
- * watch the row land in this panel within ~150ms with no page reload.
+ * Demonstrates Invariant 3 (hot-path Convex): paste a trace, watch the row
+ * land in this panel within ~150ms with no page reload.
  *
- * Renders nothing if NEXT_PUBLIC_CONVEX_URL is unset (replay-only deploys).
+ * Renders nothing if NEXT_PUBLIC_CONVEX_URL is unset or unreachable.
  *
  * Split into outer (env-gate) + inner (useQuery) because in CI the build
  * runs without NEXT_PUBLIC_CONVEX_URL set; `app/providers.tsx` then
@@ -19,11 +20,38 @@ import { api } from "@/convex/_generated/api";
  * conditionally keeps useQuery off the call stack when there's no
  * provider in the tree.
  */
-export function ConvexLiveActivity({ orgId = "demo-org" }: { orgId?: string }) {
-  // process.env.NEXT_PUBLIC_* is inlined at BUILD time by Next.js, so this
-  // check resolves to a constant per build target — no runtime hooks
-  // ordering concern.
-  if (!process.env.NEXT_PUBLIC_CONVEX_URL) return null;
+export function ConvexLiveActivity({
+  orgId = process.env.NEXT_PUBLIC_TRIAGE_ORG_ID?.trim(),
+}: {
+  orgId?: string;
+}) {
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const [reachable, setReachable] = useState(false);
+
+  useEffect(() => {
+    if (!url) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1500);
+    fetch(`${url.replace(/\/$/, "")}/version`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((res) => {
+        if (!cancelled) setReachable(res.ok);
+      })
+      .catch(() => {
+        if (!cancelled) setReachable(false);
+      })
+      .finally(() => clearTimeout(timeout));
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearTimeout(timeout);
+    };
+  }, [url]);
+
+  if (!url || !orgId || !reachable) return null;
   return <ConvexLiveActivityInner orgId={orgId} />;
 }
 

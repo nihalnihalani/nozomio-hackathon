@@ -1,9 +1,9 @@
 /**
  * Hyperspell client — multi-source memory layer (Slack / Notion / Gmail).
  *
- * Invariant 4 (Hermetic Demo Mode): every outbound call has a replay
- * branch. If HYPERSPELL_API_KEY is missing, `live` mode silently falls
- * back to `replay`, never throws — the demo must run with no keys.
+ * Invariant 4 (Hermetic Demo Mode): every outbound call has an explicit
+ * replay branch. Production `live` mode fails closed when credentials or
+ * live calls are broken; only `replay` and `hybrid` may use fixtures.
  *
  * Replay layout:
  *   data/replay/hyperspell/{sha1(query)}.json     // for memories.search
@@ -75,12 +75,29 @@ function hashKey(query: string, options?: SearchOptions): string {
   return createHash("sha1").update(stable).digest("hex").slice(0, 16);
 }
 
-/** True when we cannot or should not make a real Hyperspell call. */
+function replayId(input: AddMemoryInput): string {
+  return `mem_replay_${createHash("sha1")
+    .update(input.text)
+    .digest("hex")
+    .slice(0, 8)}`;
+}
+
 function shouldReplay(): boolean {
-  const mode = getDemoMode();
-  if (mode === "replay") return true;
-  // Live/hybrid still require a key. No key ⇒ silently downgrade to replay.
-  return !process.env.HYPERSPELL_API_KEY;
+  return getDemoMode() === "replay";
+}
+
+function shouldFallbackToReplay(): boolean {
+  return getDemoMode() === "hybrid";
+}
+
+function requireApiKey(): string {
+  const apiKey = process.env.HYPERSPELL_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "HYPERSPELL_API_KEY is required in live mode. Set DEMO_MODE=replay for fixture playback or DEMO_MODE=hybrid for live-with-replay-fallback."
+    );
+  }
+  return apiKey;
 }
 
 const ReplaySearchPayloadSchema = z.object({
@@ -99,25 +116,36 @@ export class HyperspellClient {
       if (shouldReplay()) {
         await appendReplayWrite(input);
         // Deterministic synthetic id so reinforcement tests can assert on it.
-        const id = `mem_replay_${createHash("sha1")
-          .update(input.text)
-          .digest("hex")
-          .slice(0, 8)}`;
-        return { id };
+        return { id: replayId(input) };
       }
-      return await liveAdd(input);
+      let apiKey: string;
+      try {
+        apiKey = requireApiKey();
+      } catch (err) {
+        if (!shouldFallbackToReplay()) throw err;
+        await appendReplayWrite(input);
+        return { id: replayId(input) };
+      }
+      return await liveAdd(input, apiKey);
     },
 
     search: async (input: SearchInput): Promise<SearchResult> => {
       if (shouldReplay()) {
         return await replaySearch(input);
       }
+      let apiKey: string;
       try {
-        return await liveSearch(input);
+        apiKey = requireApiKey();
       } catch (err) {
-        // Invariant 4: never let a live failure bubble up on the demo path.
-        // Fall back to replay so the trace UI still renders something.
-        console.warn("[hyperspell] live search failed, falling back:", err);
+        if (!shouldFallbackToReplay()) throw err;
+        console.warn("[hyperspell] missing live key, falling back to replay:", err);
+        return await replaySearch(input);
+      }
+      try {
+        return await liveSearch(input, apiKey);
+      } catch (err) {
+        if (!shouldFallbackToReplay()) throw err;
+        console.warn("[hyperspell] live search failed, falling back to replay:", err);
         return await replaySearch(input);
       }
     },
@@ -173,8 +201,10 @@ interface LiveSearchResponseRaw {
   errors?: unknown;
 }
 
-async function liveSearch(input: SearchInput): Promise<SearchResult> {
-  const apiKey = process.env.HYPERSPELL_API_KEY!;
+async function liveSearch(
+  input: SearchInput,
+  apiKey: string
+): Promise<SearchResult> {
   // Real endpoint: POST /memories/query (no /v1 prefix; no `source_weights`,
   // no top-level `limit` — use options.max_results). Per-source weighting
   // is not exposed via this surface; we keep the in-memory weighting on the
@@ -242,8 +272,10 @@ interface LiveAddResponseRaw {
   status?: string;
 }
 
-async function liveAdd(input: AddMemoryInput): Promise<{ id: string }> {
-  const apiKey = process.env.HYPERSPELL_API_KEY!;
+async function liveAdd(
+  input: AddMemoryInput,
+  apiKey: string
+): Promise<{ id: string }> {
   // Real endpoint: POST /memories/add. Body fields: text, resource_id?,
   // title?, date?, metadata?. There is no top-level `source` field — we
   // encode it in `metadata.source` so callers (reinforce, ingest) can

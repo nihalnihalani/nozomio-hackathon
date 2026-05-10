@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 
 /**
  * Top-right status pill that surfaces the current DEMO_MODE.
- * `replay` is the demo-stage default; `live` is the dev/prod default.
+ * `live` is the production default; `replay` is explicit fixture playback.
  *
  * The mode is server-side (`process.env.DEMO_MODE`); we fetch it from
  * the `GET /api/triage` healthz endpoint on mount so the badge reflects
@@ -26,15 +26,15 @@ export function DemoModeBadge({ mode }: { mode?: DemoMode }) {
         setServerMode(j.demoMode);
       })
       .catch(() => {
-        // Silent — fall back to prop or "replay" default.
+        // Silent — fall back to prop or "live" default.
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Server truth > prop > replay default.
-  const m: DemoMode = serverMode ?? mode ?? "replay";
+  // Server truth > prop > production default.
+  const m: DemoMode = serverMode ?? mode ?? "live";
 
   const styles: Record<DemoMode, string> = {
     live: "bg-green-600/20 text-green-300 border-green-600/40",
@@ -44,7 +44,7 @@ export function DemoModeBadge({ mode }: { mode?: DemoMode }) {
 
   const label: Record<DemoMode, string> = {
     live: "LIVE",
-    replay: "DEMO MODE: replay",
+    replay: "REPLAY",
     hybrid: "HYBRID",
   };
 
@@ -55,7 +55,7 @@ export function DemoModeBadge({ mode }: { mode?: DemoMode }) {
         "h-6 px-2 font-mono text-[10px] tracking-wider uppercase",
         styles[m]
       )}
-      aria-label={`demo mode: ${m}`}
+      aria-label={`runtime mode: ${m}`}
     >
       <span className="relative mr-1.5 inline-flex h-1.5 w-1.5">
         <span

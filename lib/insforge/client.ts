@@ -6,9 +6,9 @@
  * one-way (Convex → InsForge); a reverse mirror would leak
  * multi-tenant data and is a hard reject in code review.
  *
- * Invariant 4 (Hermetic Demo Mode): in replay or no-keys, mirror
- * becomes a no-op so the demo never fails because InsForge isn't
- * provisioned. The Convex action fires-and-forgets this regardless.
+ * Invariant 4 (Hermetic Demo Mode): replay mode is an explicit no-op.
+ * Production live mode fails closed when InsForge is not configured so
+ * cold-path write failures are visible instead of silently disappearing.
  */
 
 import { getDemoMode } from "@/lib/types";
@@ -38,24 +38,30 @@ export class InsForgeClient {
   async mirrorIncident(
     input: MirrorIncidentInput
   ): Promise<MirrorIncidentResult> {
-    if (getDemoMode() === "replay") {
+    const mode = getDemoMode();
+    if (mode === "replay") {
       return { ok: true, skipped: "replay" };
     }
     const baseUrl = process.env.INSFORGE_BASE_URL;
-    const anonKey = process.env.INSFORGE_ANON_KEY;
-    if (!baseUrl || !anonKey) {
-      // Invariant 4: silently degrade rather than throw on the demo path.
-      return { ok: true, skipped: "missing_config" };
+    const apiKey =
+      process.env.INSFORGE_SERVICE_ROLE_KEY || process.env.INSFORGE_ANON_KEY;
+    if (!baseUrl || !apiKey) {
+      if (mode === "hybrid") {
+        return { ok: true, skipped: "missing_config" };
+      }
+      return {
+        ok: false,
+        error:
+          "INSFORGE_BASE_URL and INSFORGE_SERVICE_ROLE_KEY or INSFORGE_ANON_KEY are required in live mode.",
+      };
     }
     try {
       const res = await fetch(`${baseUrl}/api/v1/incidents`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          // Anon key for the SDK-level auth; row-level security in
-          // InsForge enforces org_id isolation per Invariant 3.
-          apikey: anonKey,
-          authorization: `Bearer ${anonKey}`,
+          apikey: apiKey,
+          authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
           org_id: input.orgId,

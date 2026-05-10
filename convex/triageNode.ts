@@ -158,11 +158,10 @@ export const runInternal = internalAction({
  * "replay"` runs. Uses `@convex-dev/agent` for thread + tool calling +
  * RAG (`searchOtherThreads`). The replay path keeps `runInternal` above.
  *
- * Codex pass-3 honesty: explicit Trace-A gating stays. If no prior Trace
- * A ran for this org within the window, we mark the run with a
- * `[degraded]` notice via `errorMessage` so the UI can surface it. The
- * agent still runs — `[degraded]` does not block the recall, it labels
- * the result as missing the reinforcement signal (Invariant 2).
+   * Production honesty: if no prior reinforcement event exists for this org
+   * within the window, mark the run with a `[degraded]` notice via
+   * `errorMessage` so the UI can surface that memory reinforcement is not
+   * active yet. The agent still runs.
  *
  * Invariant 3 (Hot/Cold split): InsForge mirror runs at the END via the
  * Next.js HTTP route — we do NOT import `lib/insforge` for the mirror
@@ -182,7 +181,7 @@ export const runTriage = internalAction({
   },
   handler: async (ctx, args) => {
     // ─── Pre-flight: LLM key required for live agent path ──────────────
-    // The agent uses openai.chat("gpt-4o-mini") in convex/triageAgent.ts
+    // The agent uses openai.chat("gpt-4o") in convex/triageAgent.ts
     // (was Anthropic in PR #10; we migrated to OpenAI when we verified
     // the sk-proj-... key worked for both chat + embeddings). Accept
     // either provider key — the actual model selection happens in
@@ -204,23 +203,23 @@ export const runTriage = internalAction({
       status: "running",
     });
 
-    // ─── Codex pass-3 gate: explicit Trace A presence check ─────────────
+    // ─── Reinforcement context check ────────────────────────────────────
     // Built-in RAG (`searchOtherThreads: true` in `triageAgent.ts`) gives
-    // the agent additional context, but the explicit `[degraded]` flag is
-    // load-bearing for Invariant 2 demo honesty.
-    const hasPriorA = await ctx.runQuery(
-      internal.traceState.hasRecentTraceA,
+    // the agent additional context, but the explicit `[degraded]` flag
+    // makes missing reinforcement visible.
+    const hasRecentReinforcement = await ctx.runQuery(
+      internal.traceState.hasRecentReinforcement,
       { orgId: args.orgId, withinMs: 5 * 60 * 1000 }
     );
-    if (!hasPriorA) {
+    if (!hasRecentReinforcement) {
       // Persist the marker without failing the run. The status stays
-      // `running` and will flip to `done` after the agent completes.
-      // Wave 2A's UI will surface this `errorMessage` as a yellow banner.
+      // `running` and will flip to `done` after the agent completes. The UI
+      // surfaces this `errorMessage` as a yellow banner.
       await ctx.runMutation(api.triage.setStatus, {
         triageRunId: args.triageRunId,
         status: "running",
         errorMessage:
-          "[degraded] No prior Trace A run found in the last 5 minutes for this org — Invariant 2 reinforcement signal is not active. Recall results may not surface the reinforced retry-budget DM.",
+          "[degraded] No recent reinforced incident found for this org. Memory reinforcement is not active yet, so recall results may be less specific.",
       });
     }
 

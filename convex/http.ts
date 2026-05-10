@@ -11,15 +11,14 @@
  *
  * Auth mirrors the existing Next.js route at app/api/insforge-mirror/
  * route.ts: a shared `INSFORGE_MIRROR_SECRET` env var gates the
- * endpoint via the `x-mirror-secret` header. When the secret is unset
- * (dev/replay), unauthenticated calls are accepted but the mirror
- * itself silently degrades when InsForge keys are missing — matching
- * the dev-friendly behavior of the Next.js route exactly.
+ * endpoint via the `x-mirror-secret` header. When the secret is unset,
+ * unauthenticated calls are accepted for local development, but live mode
+ * still reports missing InsForge configuration as a mirror failure.
  *
  * Status codes:
  *   401 — missing/wrong x-mirror-secret (when secret is configured)
  *   400 — invalid JSON or schema validation failure
- *   200 — mirror succeeded (or silently skipped in replay/no-keys mode)
+ *   200 — mirror succeeded, replay skipped, or hybrid skipped missing config
  *   502 — real InsForge call failed; body preserves the error envelope
  *
  * ADDITIVE: app/api/insforge-mirror/route.ts is intentionally left in
@@ -52,9 +51,8 @@ const RequestSchema = z.object({
 function isAuthorized(req: Request): boolean {
   const secret = process.env.INSFORGE_MIRROR_SECRET;
   if (!secret) {
-    // No secret configured → dev/replay mode → accept (the InsForge
-    // client will short-circuit if InsForge keys are missing, so no
-    // data leaks).
+    // No secret configured -> local development. Production deployments
+    // should set INSFORGE_MIRROR_SECRET because the endpoint is public.
     return true;
   }
   const provided =
@@ -97,8 +95,8 @@ const mirrorPost = httpAction(async (ctx, req) => {
     actor: parsed.data.actor ?? null,
   });
 
-  // Match the Next.js route's pass-3 status mapping: silent-degrade
-  // returns 200 (skip reason in body), real failures return 502.
+  // Match the Next.js route's status mapping: success and intentional skips
+  // return 200 (skip reason in body), real failures return 502.
   const status = result.ok ? 200 : 502;
   if (!result.ok) {
     console.warn(

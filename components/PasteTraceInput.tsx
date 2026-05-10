@@ -1,18 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-export const SAMPLE_TRACE_A = ``;
-export const SAMPLE_TRACE_B = ``;
-
 interface PasteTraceInputProps {
   onSubmit: (args: { trace: string }) => void;
   disabled?: boolean;
-  /** Optional initial value (used by "Run on similar alert" prefill) */
+  /** Optional initial value for caller-provided context. */
   initialValue?: string;
   /** When non-null, programmatically replaces textarea contents */
   controlledValue?: string;
@@ -35,12 +32,6 @@ export function PasteTraceInput({
     const trimmed = value.trim();
     if (!trimmed || disabled) return;
     onSubmit({ trace: trimmed });
-  };
-
-  const handleSample = (sample: string) => {
-    if (disabled) return;
-    setInternal(sample);
-    onSubmit({ trace: sample });
   };
 
   return (

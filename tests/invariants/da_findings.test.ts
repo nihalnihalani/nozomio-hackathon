@@ -31,7 +31,7 @@ describe("DA #1 — bogus traces are rejected (Cite-Or-Die, no fabrication)", ()
       path.join(ROOT, "lib/agent/loop.ts"),
       "utf-8"
     );
-    expect(src).toMatch(/doesn't match any known fixture/);
+    expect(src).toMatch(/doesn't match any replay fixture/);
     expect(src).toMatch(/await emit\(\{ type: "status", status: "error" \}\)/);
   });
 });

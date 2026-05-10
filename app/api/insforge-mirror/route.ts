@@ -13,10 +13,10 @@
  *
  * Auth: a shared internal-mirror secret (`INSFORGE_MIRROR_SECRET` env)
  * gates this route from the public internet. Convex sets the same env
- * and includes it in the `x-mirror-secret` header. In replay mode or
- * when the secret is unset (dev), the route accepts unauthenticated
- * calls but only mirrors when DEMO_MODE !== replay AND InsForge keys
- * are present.
+   * and includes it in the `x-mirror-secret` header. When the secret is
+   * unset, this route is open for local development; production deploys
+   * should set the secret because live mode now reports missing InsForge
+   * configuration as a failure.
  */
 
 import { type NextRequest, NextResponse } from "next/server";
@@ -108,7 +108,8 @@ export async function GET() {
     route: "insforge-mirror",
     demoMode: getDemoMode(),
     hasInsForge:
-      !!process.env.INSFORGE_BASE_URL && !!process.env.INSFORGE_ANON_KEY,
+      !!process.env.INSFORGE_BASE_URL &&
+      !!(process.env.INSFORGE_SERVICE_ROLE_KEY || process.env.INSFORGE_ANON_KEY),
     secretGated: !!process.env.INSFORGE_MIRROR_SECRET,
   });
 }
