@@ -194,14 +194,14 @@ describe("Wave 2B — Agent has explicit stopWhen budget", () => {
   });
 });
 
-describe("Wave 2B — Agent component path preserves Trace A → Trace B reinforcement honesty", () => {
-  it("convex/triageNode.ts:runTriage calls internal.traceState.hasRecentTraceA", async () => {
+describe("Wave 2B — Agent component path preserves reinforcement honesty", () => {
+  it("convex/triageNode.ts:runTriage calls internal.traceState.hasRecentReinforcement", async () => {
     const src = await readSource("convex/triageNode.ts");
 
     // The new agent-path action must explicitly call the gate query.
     expect(
-      /internal\.traceState\.hasRecentTraceA/.test(src),
-      "runTriage must call `internal.traceState.hasRecentTraceA` to preserve Codex pass-3 honesty"
+      /internal\.traceState\.hasRecentReinforcement/.test(src),
+      "runTriage must call `internal.traceState.hasRecentReinforcement` to preserve reinforcement honesty"
     ).toBe(true);
 
     // And it must run inside the `runTriage` action body, not just be an
@@ -213,12 +213,12 @@ describe("Wave 2B — Agent component path preserves Trace A → Trace B reinfor
     ).toBeGreaterThan(-1);
     const runTriageBlock = src.slice(runTriageStart);
     expect(
-      /hasRecentTraceA/.test(runTriageBlock),
-      "the `hasRecentTraceA` call must live inside `runTriage`'s handler"
+      /hasRecentReinforcement/.test(runTriageBlock),
+      "the `hasRecentReinforcement` call must live inside `runTriage`'s handler"
     ).toBe(true);
   });
 
-  it("emits a [degraded] marker when no prior Trace A exists", async () => {
+  it("emits a [degraded] marker when no recent reinforcement exists", async () => {
     const src = await readSource("convex/triageNode.ts");
 
     // The literal `[degraded]` marker is the user-visible signal that
@@ -229,10 +229,10 @@ describe("Wave 2B — Agent component path preserves Trace A → Trace B reinfor
       "runTriage must emit a `[degraded]` marker when no prior Trace A exists"
     ).toBe(true);
 
-    // The marker is conditional on `!hasPriorA`.
+    // The marker is conditional on `!hasRecentReinforcement`.
     expect(
-      /if\s*\(\s*!\s*hasPriorA\s*\)/.test(src),
-      "the [degraded] branch must gate on `!hasPriorA`"
+      /if\s*\(\s*!\s*hasRecentReinforcement\s*\)/.test(src),
+      "the [degraded] branch must gate on `!hasRecentReinforcement`"
     ).toBe(true);
   });
 });

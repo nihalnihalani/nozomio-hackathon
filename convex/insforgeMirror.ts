@@ -6,7 +6,7 @@
  * Phase 5 of convexplan.md — moves the InsForge mirror behind a
  * Convex-defined HTTP endpoint (see ./http.ts). The action wraps
  * lib/insforge/client.ts so the same mirror semantics apply: replay
- * mode no-ops, missing keys silently degrade, real failures surface
+ * mode no-ops, hybrid may skip missing config, and live failures surface
  * as `{ ok: false, error }`.
  *
  * Lives in `"use node"` because lib/insforge/client.ts (transitively

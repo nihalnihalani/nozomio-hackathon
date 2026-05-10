@@ -8,17 +8,14 @@ import { CitationDrawer } from "@/components/CitationDrawer";
 import { ConvexLiveActivity } from "@/components/ConvexLiveActivity";
 import { DemoModeBadge } from "@/components/DemoModeBadge";
 import { HyperspellConnectButton } from "@/components/HyperspellConnectButton";
-import {
-  PasteTraceInput,
-  SAMPLE_TRACE_B,
-} from "@/components/PasteTraceInput";
+import { PasteTraceInput } from "@/components/PasteTraceInput";
 import { TraceUI } from "@/components/TraceUI";
 import { TimelineCard } from "@/components/ResultCards/TimelineCard";
 import { RootCauseCard } from "@/components/ResultCards/RootCauseCard";
 import { SuspectedFixCard } from "@/components/ResultCards/SuspectedFixCard";
 import { SimilarIncidentsCard } from "@/components/ResultCards/SimilarIncidentsCard";
 import { useTriage } from "@/lib/hooks/useTriage";
-import type { Citation, DemoMode } from "@/lib/types";
+import type { Citation } from "@/lib/types";
 import type { TriageRunSnapshot } from "@/lib/hooks/useTriage";
 import { cn } from "@/lib/utils";
 
@@ -98,23 +95,21 @@ function TriagePanel({
 export default function HomePage() {
   const triage = useTriage();
 
-  // We track *up to two* run ids — the primary (Trace A) and a follow-up
-  // (Trace B). They render side-by-side on wide screens, stacked on mobile.
+  // Track up to two incident runs. They render side-by-side on wide screens,
+  // stacked on mobile, so operators can compare a follow-up alert with the
+  // first incident without relying on built-in sample data.
   const [runAId, setRunAId] = useState<string | null>(null);
   const [runBId, setRunBId] = useState<string | null>(null);
 
   const [drawerCitation, setDrawerCitation] = useState<Citation | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [archOpen, setArchOpen] = useState(false);
-  const [traceBPrefill, setTraceBPrefill] = useState<string | null>(null);
 
   const snapA = triage.byId(runAId);
   const snapB = triage.byId(runBId);
 
-  // Compute the set of source_ids that appear in B but NOT in A — these get
-  // the "NEW" pulse. This is the visible Invariant-2 artifact: judges see
-  // the reinforced memory show up in B because A's reinforcement step wrote
-  // it back to Hyperspell.
+  // Compute the set of source_ids that appear in the follow-up but not in the
+  // initial run. These get the "NEW" pulse and make reinforcement visible.
   const newSourceIdsInB = useMemo<Set<string>>(() => {
     if (!snapA || !snapB) return new Set();
     const aIds = new Set(
@@ -132,16 +127,14 @@ export default function HomePage() {
   const handleSubmit = useCallback(
     async ({ trace }: { trace: string }) => {
       // Routing rules:
-      //   1. No A yet → submit as A
-      //   2. A is running → ignore (button disabled, but defensive)
-      //   3. A is done, B not started → submit as B (the wow-moment beat).
-      //      Refuse if the new trace is identical to A — that would put A's
-      //      result in slot B and the new-citation diff would be empty.
-      //      (DA #2 finding.)
-      //   4. Both populated → reset and treat as new A
+      //   1. No initial run yet → submit as initial incident
+      //   2. Initial run is running → ignore (button disabled, but defensive)
+      //   3. Initial run is done, follow-up not started → submit as follow-up.
+      //      Refuse if the trace is identical so citation-diff highlighting
+      //      does not report a false "new source" state.
+      //   4. Both populated → reset and treat as a new initial incident
       if (!runAId) {
         setRunBId(null);
-        setTraceBPrefill(null);
         const id = await triage.run({ trace });
         setRunAId(id);
         return;
@@ -151,10 +144,7 @@ export default function HomePage() {
       }
       if (snapA?.status === "done" && !runBId) {
         if (trace.trim() === (snapA?.inputTrace ?? "").trim()) {
-          // Same trace twice — block the slot-B path so the wow moment isn't
-          // poisoned. Reset and re-run as A instead.
           setRunBId(null);
-          setTraceBPrefill(null);
           const id = await triage.run({ trace });
           setRunAId(id);
           return;
@@ -165,40 +155,24 @@ export default function HomePage() {
       }
       // Both populated → start over
       setRunBId(null);
-      setTraceBPrefill(null);
       const id = await triage.run({ trace });
       setRunAId(id);
     },
     [runAId, runBId, snapA, triage]
   );
 
-  const handleSimilarAlert = useCallback(async () => {
-    if (!snapA || snapA.status !== "done" || runBId) return;
-    setTraceBPrefill(SAMPLE_TRACE_B);
-    const id = await triage.run({ trace: SAMPLE_TRACE_B });
-    setRunBId(id);
-  }, [snapA, runBId, triage]);
-
   const handleReset = useCallback(() => {
     setRunAId(null);
     setRunBId(null);
-    setTraceBPrefill(null);
     setDrawerCitation(null);
     setDrawerOpen(false);
   }, []);
 
-  const showSimilarButton =
-    snapA?.status === "done" && !runBId;
   const isAnyRunning =
     snapA?.status === "running" ||
     snapA?.status === "pending" ||
     snapB?.status === "running" ||
     snapB?.status === "pending";
-
-  // DEMO_MODE is server-side; the badge fetches truth from /api/triage on
-  // mount. We pass `undefined` as the prop fallback so the component falls
-  // back to its own default ("replay") if the fetch fails.
-  const demoMode: DemoMode | undefined = undefined;
 
   const hasAnyResult = !!snapA;
 
@@ -219,12 +193,25 @@ export default function HomePage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <HyperspellConnectButton getToken={async () => {
-              const res = await fetch("/api/hyperspell/token", { method: "POST" });
-              const { token } = await res.json();
-              return token;
-            }} />
-            <DemoModeBadge mode={demoMode} />
+            <HyperspellConnectButton
+              getToken={async () => {
+                const res = await fetch("/api/hyperspell/token", {
+                  method: "POST",
+                });
+                const payload = (await res.json()) as {
+                  token?: string;
+                  error?: string;
+                };
+                if (!res.ok || !payload.token) {
+                  throw new Error(
+                    payload.error ?? "Hyperspell token endpoint failed"
+                  );
+                }
+                const { token } = payload;
+                return token;
+              }}
+            />
+            <DemoModeBadge />
             <Button
               type="button"
               variant="outline"
@@ -254,24 +241,7 @@ export default function HomePage() {
           <PasteTraceInput
             onSubmit={handleSubmit}
             disabled={isAnyRunning}
-            controlledValue={
-              traceBPrefill !== null ? traceBPrefill : undefined
-            }
           />
-          {showSimilarButton && (
-            <div className="flex justify-end">
-              <Button
-                type="button"
-                variant="default"
-                size="sm"
-                onClick={handleSimilarAlert}
-                className="bg-fuchsia-600 hover:bg-fuchsia-600/90"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                Run on similar alert
-              </Button>
-            </div>
-          )}
         </section>
 
         {/* ─── Output: A (and B if present) ──────────────────────────── */}
@@ -283,7 +253,7 @@ export default function HomePage() {
             )}
           >
             <div className="flex flex-col gap-4">
-              <SectionHeader label="Trace A" status={snapA?.status} />
+              <SectionHeader label="Incident 1" status={snapA?.status} />
               <TriagePanel
                 snap={snapA}
                 onCitationClick={openDrawer}
@@ -292,7 +262,11 @@ export default function HomePage() {
             </div>
             {snapB && (
               <div className="flex flex-col gap-4">
-                <SectionHeader label="Trace B (similar alert)" status={snapB.status} highlight />
+                <SectionHeader
+                  label="Follow-up Incident"
+                  status={snapB.status}
+                  highlight
+                />
                 <TriagePanel
                   snap={snapB}
                   newSourceIds={newSourceIdsInB}

@@ -21,8 +21,8 @@
  * register the provider twice and get duplicate exports. The
  * `globalThis.__triagePosthogInit` flag prevents that.
  *
- * Failure mode: if `POSTHOG_API_KEY` is missing this is a SILENT NO-OP.
- * The demo path (`DEMO_MODE=replay`, no API keys) must keep working.
+ * Failure mode: if `POSTHOG_API_KEY` is missing this is a silent no-op.
+ * Observability must never block live triage or explicit replay runs.
  *
  * ENV:
  *   POSTHOG_API_KEY — required for export. Without it, this file does
@@ -44,8 +44,8 @@ if (!globalThis.__triagePosthogInit) {
   if (process.env.POSTHOG_API_KEY) {
     try {
       // Imports are inside the guard so the OTel deps don't load at all
-      // when PostHog isn't configured — keeps the demo-path cold start
-      // unchanged for teams running with no keys.
+      // when PostHog isn't configured, so optional analytics do not affect
+      // triage startup.
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { trace } = require("@opentelemetry/api") as typeof import("@opentelemetry/api");
       // eslint-disable-next-line @typescript-eslint/no-require-imports

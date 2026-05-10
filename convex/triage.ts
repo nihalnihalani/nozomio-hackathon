@@ -140,10 +140,10 @@ export const finalizeResult = mutation({
  *
  * Phase 1 (`@convex-dev/agent`) — dual-path scheduler:
  *
- *   - DEMO_MODE=replay  → schedule the legacy `runInternal` action which
- *                          replays a fixture via `lib/agent/loop.ts:runReplay`.
- *                          Honest hermetic-demo lifeboat (Invariant 4).
- *   - otherwise          → create an Agent component thread, persist its
+   *   - DEMO_MODE=replay  → schedule the legacy `runInternal` action which
+   *                          replays a fixture via `lib/agent/loop.ts:runReplay`.
+   *                          Explicit fixture playback only (Invariant 4).
+   *   - otherwise          → create an Agent component thread, persist its
  *                          threadId on the triageRun row, schedule the new
  *                          `runTriage` action that uses the Agent component.
  *
@@ -153,10 +153,9 @@ export const finalizeResult = mutation({
 export const start = mutation({
   args: { orgId: v.string(), trace: v.string() },
   handler: async (ctx, args) => {
-    // Replay mode keeps the hand-rolled loop. The Agent component runs
-    // LIVE only — replay's deterministic fixtures are the demo lifeboat
-    // (Invariant 4 — Hermetic Demo Mode).
-    const demoMode = process.env.DEMO_MODE ?? "replay";
+    // Replay mode keeps the hand-rolled loop. The production default is
+    // live; deterministic fixtures only run when DEMO_MODE=replay is set.
+    const demoMode = process.env.DEMO_MODE ?? "live";
     const useAgent = demoMode !== "replay";
 
     let threadId: string | undefined;

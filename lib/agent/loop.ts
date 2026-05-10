@@ -9,7 +9,8 @@
  * Invariant 1 (Cite-Or-Die): the system prompt enforces "refuse without
  * citation," and tools surface verification status in their output.
  * Invariant 4 (Hermetic Demo Mode): the entire loop runs without any
- * external keys when DEMO_MODE=replay (the default).
+ * external keys only when DEMO_MODE=replay is explicitly selected. Live
+ * production mode fails closed; hybrid mode may fall back to replay.
  */
 
 import { promises as fs } from "node:fs";
@@ -193,7 +194,7 @@ async function runReplay(
     await emit({
       type: "error",
       message:
-        "This stack trace doesn't match any known fixture. Try the Trace A or Trace B sample buttons, or run the project in live mode with real Hyperspell + Nia keys.",
+        "This stack trace doesn't match any replay fixture. Run in live mode with real Hyperspell + Nia keys, or provide an input that exists in data/replay/.",
     });
     await emit({ type: "status", status: "error" });
     return null;
@@ -303,11 +304,13 @@ function extractToolCitations(
 /**
  * Live agent loop using Vercel AI SDK. Targets `streamText` + `tool` +
  * `stepCountIs(5)` (AI SDK 5/6 surface). If the runtime AI SDK is
- * older, the import will throw and we'll fall back to replay below.
+ * older, the import will throw. Live mode reports the failure; hybrid mode
+ * falls back to replay.
  */
 // Loose types for the dynamic AI SDK import — the build must work even
 // if the installed `ai` version (4.x vs 5.x vs 6.x) differs from what
-// the runtime expects. The try/catch + replay fallback is the contract.
+// the runtime expects. Production live mode reports runtime mismatches
+// instead of substituting replay data.
 //
 // AI SDK v6 contract: `tool({ description, inputSchema, execute })`. The
 // v4-era `parameters:` key was renamed to `inputSchema:` in v5/v6 (see
@@ -325,16 +328,21 @@ type AiToolFactory = (def: {
 type AiStreamText = (config: Record<string, unknown>) => Promise<{
   textStream: AsyncIterable<string>;
 }>;
-type AiAnthropic = (modelId: string) => unknown;
+type AiModelFactory = (modelId: string) => unknown;
+type AiOpenAIProvider = AiModelFactory & {
+  chat?: (modelId: string) => unknown;
+};
 
 async function runLive(
   input: RunAgentInput,
-  emit: EventSink
+  emit: EventSink,
+  options: { allowReplayFallback: boolean }
 ): Promise<TriageResult | null> {
   let streamText: AiStreamText;
   let tool: AiToolFactory;
   let stepCountIs: ((n: number) => unknown) | undefined;
-  let anthropic: AiAnthropic;
+  let anthropic: AiModelFactory | undefined;
+  let openai: AiOpenAIProvider | undefined;
   try {
     const aiMod = (await import("ai")) as Record<string, unknown>;
     streamText = aiMod.streamText as AiStreamText;
@@ -345,18 +353,52 @@ async function runLive(
       string,
       unknown
     >;
-    anthropic = anthMod.anthropic as AiAnthropic;
+    anthropic = anthMod.anthropic as AiModelFactory | undefined;
+    const openaiMod = (await import("@ai-sdk/openai")) as Record<
+      string,
+      unknown
+    >;
+    openai = openaiMod.openai as AiOpenAIProvider | undefined;
   } catch (err) {
-    await emit({
-      type: "error",
-      message: `Live mode unavailable: ${(err as Error).message}. Falling back to replay.`,
-    });
-    return await runReplay(input, emit);
+    return await failOrReplay(
+      input,
+      emit,
+      options.allowReplayFallback,
+      `Live mode unavailable: ${(err as Error).message}`
+    );
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return await runReplay(input, emit);
+  const hasAnthropic = Boolean(process.env.ANTHROPIC_API_KEY);
+  const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
+  if (!hasAnthropic && !hasOpenAI) {
+    return await failOrReplay(
+      input,
+      emit,
+      options.allowReplayFallback,
+      "OPENAI_API_KEY or ANTHROPIC_API_KEY is required in live mode"
+    );
   }
+  if (hasAnthropic && !anthropic) {
+    return await failOrReplay(
+      input,
+      emit,
+      options.allowReplayFallback,
+      "@ai-sdk/anthropic did not export an anthropic provider"
+    );
+  }
+  if (!hasAnthropic && (!openai || typeof openai !== "function")) {
+    return await failOrReplay(
+      input,
+      emit,
+      options.allowReplayFallback,
+      "@ai-sdk/openai did not export an openai provider"
+    );
+  }
+  const languageModel = hasAnthropic
+    ? anthropic!("claude-sonnet-4-5")
+    : openai!.chat
+      ? openai!.chat("gpt-4o")
+      : openai!("gpt-4o");
 
   const system = await loadPrompt();
   const hyperspell = getHyperspell();
@@ -439,7 +481,7 @@ async function runLive(
   let collected = "";
   try {
     const config: Record<string, unknown> = {
-      model: anthropic("claude-sonnet-4-5"),
+      model: languageModel,
       system,
       prompt,
       tools,
@@ -463,36 +505,57 @@ async function runLive(
       collected += chunk;
     }
   } catch (err) {
-    await emit({
-      type: "error",
-      message: `Live model error: ${(err as Error).message}. Falling back to replay.`,
-    });
-    return await runReplay(input, emit);
+    return await failOrReplay(
+      input,
+      emit,
+      options.allowReplayFallback,
+      `Live model error: ${(err as Error).message}`
+    );
   }
 
   // Extract the JSON blob from the model's text output.
   const jsonMatch = collected.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    await emit({
-      type: "error",
-      message: "Model returned no JSON; falling back to replay.",
-    });
-    return await runReplay(input, emit);
+    return await failOrReplay(
+      input,
+      emit,
+      options.allowReplayFallback,
+      "Model returned no JSON"
+    );
   }
   let parsed: TriageResult;
   try {
     parsed = TriageResultSchema.parse(JSON.parse(jsonMatch[0]));
   } catch (err) {
-    await emit({
-      type: "error",
-      message: `Result schema validation failed: ${(err as Error).message}`,
-    });
-    return await runReplay(input, emit);
+    return await failOrReplay(
+      input,
+      emit,
+      options.allowReplayFallback,
+      `Result schema validation failed: ${(err as Error).message}`
+    );
   }
 
   await emit({ type: "result", result: parsed });
   await emit({ type: "status", status: "done" });
   return parsed;
+}
+
+async function failOrReplay(
+  input: RunAgentInput,
+  emit: EventSink,
+  allowReplayFallback: boolean,
+  message: string
+): Promise<TriageResult | null> {
+  if (allowReplayFallback) {
+    await emit({
+      type: "error",
+      message: `${message}. Falling back to replay because DEMO_MODE=hybrid.`,
+    });
+    return await runReplay(input, emit);
+  }
+  await emit({ type: "error", message });
+  await emit({ type: "status", status: "error" });
+  return null;
 }
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
@@ -512,9 +575,9 @@ export async function runAgent(
     if (mode === "replay") {
       return await runReplay(input, emit);
     }
-    // hybrid + live both go to runLive; runLive falls back to replay
-    // internally on any error (Invariant 4).
-    return await runLive(input, emit);
+    return await runLive(input, emit, {
+      allowReplayFallback: mode === "hybrid",
+    });
   } catch (err) {
     await emit({ type: "error", message: (err as Error).message });
     await emit({ type: "status", status: "error" });

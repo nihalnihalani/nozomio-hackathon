@@ -119,13 +119,17 @@ export const TriageResultSchema = z.object({
 });
 export type TriageResult = z.infer<typeof TriageResultSchema>;
 
-// ─── Demo mode ────────────────────────────────────────────────────────────────
+// ─── Runtime mode ─────────────────────────────────────────────────────────────
 
 export const DemoModeSchema = z.enum(["live", "replay", "hybrid"]);
 export type DemoMode = z.infer<typeof DemoModeSchema>;
 
 export function getDemoMode(): DemoMode {
-  const raw = process.env.DEMO_MODE ?? "replay";
+  const raw = process.env.DEMO_MODE ?? "live";
   const parsed = DemoModeSchema.safeParse(raw);
-  return parsed.success ? parsed.data : "replay";
+  return parsed.success ? parsed.data : "live";
+}
+
+export function allowsReplayFallback(): boolean {
+  return getDemoMode() === "hybrid";
 }

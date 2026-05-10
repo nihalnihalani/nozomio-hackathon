@@ -408,12 +408,11 @@ const produceTriage = createTool({
 /**
  * Triage Agent — wired via the `agent` Convex component.
  *
- * Phase 4 — RAG over message history. `searchOtherThreads` enables the
- * Trace A → Trace B reinforcement effect natively (the agent has access
- * to prior triage threads from the same `userId` / `orgId`). We KEEP
- * the explicit `hasRecentTraceA` gate in `triageNode.ts` for honesty
- * (the Codex pass-3 finding requires the visible `[degraded]` event)
- * — RAG `searchOtherThreads` is *additive*, not a replacement.
+ * Phase 4 — RAG over message history. `searchOtherThreads` lets follow-up
+ * incidents use prior triage threads from the same `userId` / `orgId`.
+ * `triageNode.ts` separately emits a visible `[degraded]` marker when no
+ * recent reinforcement exists; RAG is additive, not a replacement for that
+ * honesty signal.
  *
  * `stopWhen: stepCountIs(5)` mirrors the bound documented in
  * `lib/prompts/triage-system.md` ("Stop after at most 5 tool calls").
@@ -437,10 +436,9 @@ export const triageAgent = new Agent(agentComponent, {
   contextOptions: {
     // Phase 4 — built-in tool-based RAG over message history.
     // `searchOtherThreads: true` lets the agent surface relevant context
-    // from prior threads belonging to the same userId (= orgId), which is
-    // how Trace B naturally finds Trace A's run. The explicit
-    // `traceState.hasRecentTraceA` probe in `triageNode.ts` produces the
-    // user-visible `[degraded]` event when no prior Trace A exists.
+    // from prior threads belonging to the same userId (= orgId). The
+    // `traceState.hasRecentReinforcement` probe in `triageNode.ts` produces
+    // the user-visible `[degraded]` event when no recent reinforcement exists.
     searchOtherThreads: true,
     // Sliding window of recent messages to include verbatim.
     recentMessages: 10,
@@ -452,7 +450,7 @@ export const triageAgent = new Agent(agentComponent, {
       // Anthropic for chat — adding an embedding provider is an
       // intentional follow-up. Text search alone still surfaces prior
       // threads from the same `userId` (= orgId) when the trace tokens
-      // overlap, which is sufficient for the Trace A → Trace B beat.
+      // overlap, which is sufficient for follow-up incident context.
       limit: 10,
       textSearch: true,
     },

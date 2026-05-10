@@ -3,12 +3,14 @@
  *
  * Invariant 1 (Cite-Or-Die): the verifier is the heart of this file.
  * After every live Nia response, we re-read the claimed file:line from
- * `seed/billing-service/{file}` and assert it contains the claimed
+ * `NIA_SOURCE_ROOT` (default `seed/billing-service`) and assert it contains the claimed
  * content. If not, we DROP the snippet, log a warning, and the agent
  * sees fewer (verified) snippets — never silently fabricated ones.
  *
- * Invariant 4 (Hermetic Demo Mode): if NIA_API_KEY is missing, we fall
- * back to replay; we never throw on the demo path.
+ * Invariant 4 (Hermetic Demo Mode): every outbound call has an explicit
+ * replay branch. Production `live` mode fails closed when credentials,
+ * Nia, or citation verification are broken; only `replay` and `hybrid`
+ * may use fixtures.
  *
  * Replay layout:
  *   data/replay/nia/{sha1(query)}.json   // SearchCodeOutput
@@ -36,7 +38,6 @@ export interface NiaSearchInput {
 }
 
 const REPLAY_ROOT = path.join(process.cwd(), "data", "replay", "nia");
-const SEED_ROOT = path.join(process.cwd(), "seed", "billing-service");
 const NIA_API_BASE =
   process.env.NIA_API_BASE ?? "https://apigcp.trynia.ai";
 
@@ -48,22 +49,81 @@ function hashKey(query: string, mode: NiaMode): string {
 }
 
 function shouldReplay(): boolean {
-  const mode = getDemoMode();
-  if (mode === "replay") return true;
-  return !process.env.NIA_API_KEY;
+  return getDemoMode() === "replay";
+}
+
+function shouldFallbackToReplay(): boolean {
+  return getDemoMode() === "hybrid";
+}
+
+function requireApiKey(): string {
+  const apiKey = process.env.NIA_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "NIA_API_KEY is required in live mode. Set DEMO_MODE=replay for fixture playback or DEMO_MODE=hybrid for live-with-replay-fallback."
+    );
+  }
+  return apiKey;
+}
+
+function sourceRoot(): string {
+  return path.resolve(
+    process.env.NIA_SOURCE_ROOT ??
+      path.join(process.cwd(), "seed", "billing-service")
+  );
+}
+
+function normalizeForVerification(value: string): string {
+  return value
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|\s)\/\/.*$/gm, "")
+    .replace(/\s+/g, "");
+}
+
+const COMMON_IDENTIFIERS = new Set([
+  "await",
+  "async",
+  "const",
+  "else",
+  "false",
+  "function",
+  "return",
+  "true",
+  "undefined",
+]);
+
+function codeIdentifiers(value: string): string[] {
+  const withoutComments = value
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|\s)\/\/.*$/gm, "");
+  const ids = withoutComments.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? [];
+  return Array.from(
+    new Set(
+      ids.filter(
+        (id) => id.length >= 3 && !COMMON_IDENTIFIERS.has(id.toLowerCase())
+      )
+    )
+  );
+}
+
+function hasAnchoredIdentifierOverlap(claimed: string, window: string): boolean {
+  const claimIds = codeIdentifiers(claimed);
+  if (claimIds.length === 0) return false;
+  const windowIds = new Set(codeIdentifiers(window));
+  const hits = claimIds.filter((id) => windowIds.has(id));
+  const hasStrongAnchor = hits.some((id) => id.length >= 8 || /[A-Z_$]/.test(id));
+  return hasStrongAnchor && hits.length / claimIds.length >= 0.6;
 }
 
 // ─── Cite-Or-Die verifier ─────────────────────────────────────────────────────
 
 /**
- * Re-read seed/billing-service/{file} and check that the claimed line
- * contains a meaningful overlap with the claimed content.
+ * Re-read the configured source tree and check that the claimed line
+ * window contains the claimed content after whitespace/comment normalization.
  *
- * Returns `true` only if we can confirm the source. If the seed repo
- * isn't checked out yet (test/dev), we return `true` to avoid blocking
- * — the test suite (tests/invariants/cite_or_die.test.ts) is the
- * authoritative gate. In production demo path, the seed/ tree must
- * exist (Storyteller's lane), so verification is real.
+ * Returns `true` only if we can confirm the source. Missing source files
+ * are verification failures unless an operator explicitly opts out with
+ * ALLOW_UNVERIFIED_CODE_CITATIONS=1 in replay mode.
  *
  * Invariant 1: if you change this function, update
  * tests/invariants/cite_or_die.test.ts to keep parity.
@@ -71,19 +131,24 @@ function shouldReplay(): boolean {
 export async function verifyCodeSnippet(
   snippet: CodeSnippet
 ): Promise<boolean> {
-  // Defensive: the file path must be relative and inside seed/billing-service.
+  // Defensive: the file path must be relative and inside the configured source root.
   if (snippet.file.includes("..") || path.isAbsolute(snippet.file)) {
     return false;
   }
-  const abs = path.join(SEED_ROOT, snippet.file);
+  const root = sourceRoot();
+  const abs = path.resolve(root, snippet.file);
+  if (abs !== root && !abs.startsWith(`${root}${path.sep}`)) {
+    return false;
+  }
   let content: string;
   try {
     content = await fs.readFile(abs, "utf-8");
   } catch {
-    // Seed repo not present — can't verify. Be permissive in dev,
-    // strict in production via the env flag below.
-    if (process.env.STRICT_CITE_OR_DIE === "1") return false;
-    return true;
+    return (
+      getDemoMode() === "replay" &&
+      process.env.ALLOW_UNVERIFIED_CODE_CITATIONS === "1" &&
+      process.env.STRICT_CITE_OR_DIE !== "1"
+    );
   }
   const lines = content.split("\n");
   const idx = snippet.line - 1; // 1-indexed
@@ -92,24 +157,21 @@ export async function verifyCodeSnippet(
   const claimed = snippet.content.trim();
   if (!claimed) return false;
 
-  // Compare against the claimed line plus a small window of context.
-  // Nia sometimes returns the line as one chunk that spans 1-3 lines.
+  // Compare against the claimed line plus context. Nia sometimes returns
+  // a chunk that spans multiple physical lines.
   const window = lines
-    .slice(Math.max(0, idx - 1), Math.min(lines.length, idx + 3))
+    .slice(Math.max(0, idx - 2), Math.min(lines.length, idx + 3))
     .join("\n");
 
-  // Match heuristic: every "significant" non-whitespace token from the
-  // claim must appear in the window. We tolerate whitespace/quote noise.
-  const tokens = claimed
-    .split(/\s+/)
-    .map((t) => t.replace(/[`'"\\]/g, ""))
-    .filter((t) => t.length >= 4);
-  if (tokens.length === 0) {
-    // Trivial content (e.g. `}` or `;`) — accept if windowed text non-empty.
-    return window.trim().length > 0;
+  const normalizedClaim = normalizeForVerification(claimed);
+  const normalizedWindow = normalizeForVerification(window);
+  if (normalizedClaim.length < 8) {
+    return window.includes(claimed);
   }
-  const hit = tokens.filter((t) => window.includes(t)).length;
-  return hit / tokens.length >= 0.6;
+  return (
+    normalizedWindow.includes(normalizedClaim) ||
+    hasAnchoredIdentifierOverlap(claimed, window)
+  );
 }
 
 // ─── Client ───────────────────────────────────────────────────────────────────
@@ -124,8 +186,16 @@ export class NiaClient {
     if (shouldReplay()) {
       return await replaySearch(input);
     }
+    let apiKey: string;
     try {
-      const raw = await liveSearch(input);
+      apiKey = requireApiKey();
+    } catch (err) {
+      if (!shouldFallbackToReplay()) throw err;
+      console.warn("[nia] missing live key, falling back to replay:", err);
+      return await replaySearch(input);
+    }
+    try {
+      const raw = await liveSearch(input, apiKey);
       // Invariant 1: verify every snippet, drop unverified.
       const verified: CodeSnippet[] = [];
       for (const s of raw.snippets) {
@@ -138,7 +208,8 @@ export class NiaClient {
       }
       return { ...raw, snippets: verified };
     } catch (err) {
-      console.warn("[nia] live search failed, falling back:", err);
+      if (!shouldFallbackToReplay()) throw err;
+      console.warn("[nia] live search failed, falling back to replay:", err);
       return await replaySearch(input);
     }
   }
@@ -182,8 +253,10 @@ interface LiveNiaResponseRaw {
   }>;
 }
 
-async function liveSearch(input: NiaSearchInput): Promise<SearchCodeOutput> {
-  const apiKey = process.env.NIA_API_KEY!;
+async function liveSearch(
+  input: NiaSearchInput,
+  apiKey: string
+): Promise<SearchCodeOutput> {
   const body = {
     mode: input.mode ?? "query",
     messages: [{ role: "user", content: input.query }],

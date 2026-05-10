@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HyperspellClient } from "@/lib/hyperspell/client";
 import { NiaClient } from "@/lib/nia/client";
+import { InsForgeClient } from "@/lib/insforge/client";
+import { getDemoMode } from "@/lib/types";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -47,6 +49,40 @@ describe("live sponsor clients", () => {
       include_sources: true,
     });
     expect(JSON.parse(String(init.body))).not.toHaveProperty("query");
+  });
+
+  it("runtime mode defaults to live when DEMO_MODE is unset", () => {
+    delete process.env.DEMO_MODE;
+    expect(getDemoMode()).toBe("live");
+  });
+
+  it("Hyperspell live search fails closed when the API key is missing", async () => {
+    delete process.env.HYPERSPELL_API_KEY;
+    await expect(
+      new HyperspellClient().memories.search({ query: "duplicate charge" })
+    ).rejects.toThrow(/HYPERSPELL_API_KEY is required/);
+  });
+
+  it("Nia live search fails closed when the API key is missing", async () => {
+    delete process.env.NIA_API_KEY;
+    await expect(
+      new NiaClient().search({ query: "stripe webhook idempotency" })
+    ).rejects.toThrow(/NIA_API_KEY is required/);
+  });
+
+  it("InsForge live mirror reports missing configuration as a failure", async () => {
+    delete process.env.INSFORGE_BASE_URL;
+    delete process.env.INSFORGE_ANON_KEY;
+    delete process.env.INSFORGE_SERVICE_ROLE_KEY;
+
+    await expect(
+      new InsForgeClient().mirrorIncident({
+        orgId: "org_prod",
+        triageRunId: "run_1",
+        trace: "Error: duplicate charge",
+        rootCause: "duplicate webhook event",
+      })
+    ).resolves.toMatchObject({ ok: false });
   });
 
   // Hyperspell live-search/add tests removed during merge of PR #11.

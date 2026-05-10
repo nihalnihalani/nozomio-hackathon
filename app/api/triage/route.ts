@@ -2,12 +2,13 @@
  * POST /api/triage — Next.js fallback route.
  *
  * Used when Convex isn't configured (NEXT_PUBLIC_CONVEX_URL absent) or
- * for replay-only deployments where we want a thin REST surface
- * (Sentry/PagerDuty webhooks, external tooling, simple curl demos).
+ * when an external producer (Sentry/PagerDuty/webhook tooling) needs a
+ * thin REST/SSE surface.
  *
  * Streams the agent loop's events as Server-Sent Events. The frontend's
  * primary path is still useMutation(api.triage.start) + useQuery — this
- * route is the lifeboat per Invariant 4 (Hermetic Demo Mode).
+ * route keeps the same runtime mode semantics as the Convex path:
+ * live by default, replay only when DEMO_MODE=replay is explicit.
  *
  * Wire format — matches `lib/hooks/useTriage.ts` SSE consumer exactly:
  *   event: <kind>
@@ -27,15 +28,16 @@ import { ConvexHttpClient } from "convex/browser";
 import { runAgent, type AgentEvent } from "@/lib/agent/loop";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { getDemoMode } from "@/lib/types";
 
 export const runtime = "nodejs"; // we read seed/ files for cite-or-die
 
 /**
  * Mirror writer — best-effort, fire-and-forget Convex writes that
  * land on the same hot-path tables (triageRuns, toolCalls, citations)
- * as the in-Convex agent. The SSE path remains the source of truth for
- * the demo; if Convex is down or NEXT_PUBLIC_CONVEX_URL is unset, the
- * mirror silently no-ops and the demo still works (Invariant 4).
+ * as the in-Convex agent. The SSE stream remains the response source of
+ * truth; if Convex is down or NEXT_PUBLIC_CONVEX_URL is unset, the mirror
+ * no-ops and the stream still reports the actual agent outcome.
  */
 function makeConvexMirror() {
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
@@ -49,7 +51,7 @@ function makeConvexMirror() {
 
 const RequestSchema = z.object({
   trace: z.string().min(1),
-  orgId: z.string().min(1).default("demo-org"),
+  orgId: z.string().min(1).optional(),
   fixtureHint: z.string().optional(),
   /** Optional client-side run id for correlation with the UI store. */
   clientRunId: z.string().optional(),
@@ -69,7 +71,15 @@ function encodeFrame(frame: SseFrame): Uint8Array {
  * Map an AgentEvent into one or more SSE frames matching the frontend's
  * useTriage hook contract.
  */
-function toSseFrames(event: AgentEvent): SseFrame[] {
+function configuredDefaultOrgId(): string | null {
+  return (
+    process.env.TRIAGE_DEFAULT_ORG_ID?.trim() ||
+    process.env.NEXT_PUBLIC_TRIAGE_ORG_ID?.trim() ||
+    null
+  );
+}
+
+function toSseFrames(event: AgentEvent, sequence: number): SseFrame[] {
   switch (event.type) {
     case "status":
       return [{ event: "status", data: { status: event.status } }];
@@ -81,7 +91,7 @@ function toSseFrames(event: AgentEvent): SseFrame[] {
         {
           event: "tool_call_start",
           data: {
-            id: `${event.tool}-${event.at}`,
+            id: `${event.tool}-${event.at}-${sequence}`,
             tool: event.tool,
             input: event.input,
             at: event.at,
@@ -90,7 +100,7 @@ function toSseFrames(event: AgentEvent): SseFrame[] {
         {
           event: "tool_call_done",
           data: {
-            id: `${event.tool}-${event.at}`,
+            id: `${event.tool}-${event.at}-${sequence}`,
             output: event.output,
             latencyMs: event.latencyMs,
             resultCount: countResults(event.tool, event.output),
@@ -146,7 +156,14 @@ export async function POST(req: NextRequest) {
     return new Response(parsed.error.message, { status: 400 });
   }
 
-  const { trace, orgId, fixtureHint } = parsed.data;
+  const { trace, fixtureHint, clientRunId } = parsed.data;
+  const orgId = parsed.data.orgId ?? configuredDefaultOrgId();
+  if (!orgId) {
+    return new Response(
+      "orgId is required. Set TRIAGE_DEFAULT_ORG_ID or send orgId in the request body.",
+      { status: 400 }
+    );
+  }
   const convex = makeConvexMirror();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -158,6 +175,7 @@ export async function POST(req: NextRequest) {
           // Stream closed by client — swallow.
         }
       };
+      let sseSequence = 0;
 
       // Best-effort: create the Convex run row up front so the dashboard
       // and useQuery(api.triage.recentRuns) reflect the run immediately.
@@ -170,7 +188,7 @@ export async function POST(req: NextRequest) {
           });
           enqueue({
             event: "run_started",
-            data: { triageRunId },
+            data: { triageRunId, clientRunId },
           });
           await convex.mutation(api.triage.setStatus, {
             triageRunId,
@@ -189,7 +207,7 @@ export async function POST(req: NextRequest) {
       };
 
       const sink = (event: AgentEvent) => {
-        for (const f of toSseFrames(event)) enqueue(f);
+        for (const f of toSseFrames(event, sseSequence++)) enqueue(f);
 
         // Mirror to Convex hot-path tables when we have a run id.
         if (!convex || !triageRunId) return;
@@ -294,12 +312,14 @@ export async function POST(req: NextRequest) {
 export async function GET() {
   return Response.json({
     ok: true,
-    demoMode: process.env.DEMO_MODE ?? "replay",
+    demoMode: getDemoMode(),
     hasAnthropic: Boolean(process.env.ANTHROPIC_API_KEY),
+    hasOpenAI: Boolean(process.env.OPENAI_API_KEY),
     hasHyperspell: Boolean(process.env.HYPERSPELL_API_KEY),
     hasNia: Boolean(process.env.NIA_API_KEY),
     hasInsForge: Boolean(
-      process.env.INSFORGE_BASE_URL && process.env.INSFORGE_ANON_KEY
+      process.env.INSFORGE_BASE_URL &&
+        (process.env.INSFORGE_SERVICE_ROLE_KEY || process.env.INSFORGE_ANON_KEY)
     ),
   });
 }

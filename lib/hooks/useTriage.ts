@@ -42,7 +42,8 @@
  * SSE path (fallback when NEXT_PUBLIC_CONVEX_URL is unset OR probe fails):
  *   - POSTs `{ trace }` to `/api/triage`, consumes Server-Sent Events,
  *     accumulates a snapshot in local React state keyed by client-side id.
- *   - Demo runs with no Convex connection at all (Invariant 4).
+ *   - Uses the same server runtime mode as Convex (`live` by default,
+ *     `replay` only when explicitly configured).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -134,6 +135,14 @@ export interface UseTriageReturn {
 function convexEnvUrl(): string | null {
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
   return url && url.length > 0 ? url : null;
+}
+
+function configuredOrgId(): string {
+  const orgId = process.env.NEXT_PUBLIC_TRIAGE_ORG_ID?.trim();
+  if (!orgId) {
+    throw new Error("NEXT_PUBLIC_TRIAGE_ORG_ID is required to start triage");
+  }
+  return orgId;
 }
 
 /**
@@ -747,11 +756,12 @@ export function useTriage(): UseTriageReturn {
       return;
     }
     let anyRunning = false;
-    for (const id of inFlightRef.current) {
+    for (const id of Array.from(inFlightRef.current)) {
       const snap = sseStore.get(id);
       if (snap && (snap.status === "pending" || snap.status === "running")) {
         anyRunning = true;
-        break;
+      } else if (snap && (snap.status === "done" || snap.status === "error")) {
+        inFlightRef.current.delete(id);
       }
     }
     if (!anyRunning && isRunning) setIsRunning(false);
@@ -791,7 +801,7 @@ export function useTriage(): UseTriageReturn {
           // returns the new triageRunId. No SSE; the reactive
           // `useConvexSlot` subscription drives the UI from here on.
           const id = (await startTriage({
-            orgId: "demo-org",
+            orgId: configuredOrgId(),
             trace,
           })) as Id<"triageRuns">;
           if (!id) {
@@ -833,7 +843,11 @@ export function useTriage(): UseTriageReturn {
             "content-type": "application/json",
             accept: "text/event-stream",
           },
-          body: JSON.stringify({ trace, clientRunId: id }),
+          body: JSON.stringify({
+            trace,
+            orgId: configuredOrgId(),
+            clientRunId: id,
+          }),
         });
         if (!res.ok) {
           const message = `triage api ${res.status}`;

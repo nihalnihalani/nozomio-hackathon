@@ -7,7 +7,7 @@ import type { Citation, SourceType } from "@/lib/types";
 interface CitationPillProps {
   citation: Citation;
   onClick?: (citation: Citation) => void;
-  /** Render with a brief "NEW" pulse — used for Trace B's reinforced citation */
+  /** Render with a brief "NEW" pulse for newly surfaced citations. */
   isNew?: boolean;
   className?: string;
 }
