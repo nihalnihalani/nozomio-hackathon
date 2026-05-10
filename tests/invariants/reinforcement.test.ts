@@ -39,8 +39,10 @@ function citedMemoryIds(t: TraceFixture): Set<string> {
   for (const c of t.result.root_cause.citations) {
     if (c.source !== "code") ids.add(c.source_id);
   }
-  for (const c of t.result.suspected_fix.citations) {
-    if (c.source !== "code") ids.add(c.source_id);
+  if (t.result.suspected_fix) {
+    for (const c of t.result.suspected_fix.citations) {
+      if (c.source !== "code") ids.add(c.source_id);
+    }
   }
   for (const s of t.result.similar_incidents) ids.add(s.memory_id);
   return ids;
