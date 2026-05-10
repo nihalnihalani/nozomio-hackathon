@@ -278,9 +278,12 @@ export const runTriage = internalAction({
     const finalRun = await ctx.runQuery(api.triage.runById, {
       id: args.triageRunId,
     });
-    const producedTriage = Boolean(
-      finalRun?.rootCause && finalRun?.suspectedFix
-    );
+    // produceTriage is the contract: rootCause is mandatory (Cite-Or-Die),
+    // suspectedFix is optional — when searchCode returns no code citations,
+    // a triage with only Hyperspell-cited root cause + similar incidents
+    // is still a valid triage. Fabricating a fix without code evidence
+    // would violate Invariant 1.
+    const producedTriage = Boolean(finalRun?.rootCause);
 
     if (!producedTriage) {
       await ctx.runMutation(api.triage.setStatus, {

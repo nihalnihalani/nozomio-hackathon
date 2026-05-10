@@ -101,12 +101,14 @@ export const finalizeResult = mutation({
       text: v.string(),
       citations: v.array(v.string()),
     }),
-    suspectedFix: v.object({
-      file: v.string(),
-      line: v.number(),
-      diff: v.string(),
-      citations: v.array(v.string()),
-    }),
+    suspectedFix: v.optional(
+      v.object({
+        file: v.string(),
+        line: v.number(),
+        diff: v.string(),
+        citations: v.array(v.string()),
+      })
+    ),
     similarIncidents: v.array(v.string()),
     similarIncidentsDetailed: v.optional(
       v.array(
@@ -123,9 +125,9 @@ export const finalizeResult = mutation({
     const patch: Record<string, unknown> = {
       timeline: args.timeline,
       rootCause: args.rootCause,
-      suspectedFix: args.suspectedFix,
       similarIncidents: args.similarIncidents,
     };
+    if (args.suspectedFix) patch.suspectedFix = args.suspectedFix;
     if (args.similarIncidentsDetailed) {
       patch.similarIncidentsDetailed = args.similarIncidentsDetailed;
     }
