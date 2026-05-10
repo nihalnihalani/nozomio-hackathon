@@ -39,6 +39,33 @@ jobs:
             echo "label=Preview" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Sync sponsor keys to Vercel env
+        # Push the sponsor keys from GitHub Actions secrets onto the Vercel
+        # project's env (production scope on main, preview scope otherwise)
+        # before pulling. This is the only place that owns the Vercel env;
+        # changing a key in GH Actions secrets makes it live on the next
+        # deploy without anyone touching the Vercel dashboard.
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          NIA_API_KEY: ${{ secrets.NIA_API_KEY }}
+          HYPERSPELL_API_KEY: ${{ secrets.HYPERSPELL_API_KEY }}
+          INSFORGE_BASE_URL: ${{ secrets.INSFORGE_BASE_URL }}
+          INSFORGE_ANON_KEY: ${{ secrets.INSFORGE_ANON_KEY }}
+        run: |
+          set -e
+          SCOPE="${{ steps.target.outputs.env }}"
+          for KEY in OPENAI_API_KEY NIA_API_KEY HYPERSPELL_API_KEY INSFORGE_BASE_URL INSFORGE_ANON_KEY; do
+            VAL="${!KEY}"
+            if [ -z "$VAL" ]; then
+              echo "[skip] $KEY — no GH secret set"
+              continue
+            fi
+            # Remove existing (tolerates missing) then add fresh.
+            vercel env rm "$KEY" "$SCOPE" --yes --token=${{ secrets.VERCEL_TOKEN }} 2>/dev/null || true
+            printf '%s' "$VAL" | vercel env add "$KEY" "$SCOPE" --token=${{ secrets.VERCEL_TOKEN }}
+            echo "[set]  $KEY ($SCOPE)"
+          done
+
       - name: Pull Vercel environment
         run: vercel pull --yes --environment=${{ steps.target.outputs.env }} --token=${{ secrets.VERCEL_TOKEN }}
 
